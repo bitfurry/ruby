@@ -12,10 +12,10 @@ class TestGc < Test::Unit::TestCase
     GC.stress = false
 
     assert_nothing_raised do
+      tmp = nil
       1.upto(10000) {
         tmp = [0,1,2,3,4,5,6,7,8,9]
       }
-      tmp = nil
     end
     l=nil
     100000.times {
@@ -334,12 +334,20 @@ class TestGc < Test::Unit::TestCase
   def test_interrupt_in_finalizer
     bug10595 = '[ruby-core:66825] [Bug #10595]'
     src = <<-'end;'
+      Signal.trap(:INT, 'DEFAULT')
       pid = $$
       Thread.start do
         10.times {
           sleep 0.1
           Process.kill("INT", pid) rescue break
         }
+        if RUBY_PLATFORM.include?('solaris')
+          $stderr.puts `/usr/bin/psig #{$$}`
+          $stderr.puts `/usr/bin/psig #{Process.ppid}`
+        elsif File.exist?('/proc/self/status')
+          $stderr.puts IO.read('/proc/self/status')
+          $stderr.puts IO.read("/proc/#{Process.ppid}/status")
+        end
       end
       f = proc {1000.times {}}
       loop do
@@ -376,5 +384,16 @@ class TestGc < Test::Unit::TestCase
       GC.stress = true
       C.new
     end;
+  end
+
+  def test_gc_disabled_start
+    begin
+      disabled = GC.disable
+      c = GC.count
+      GC.start
+      assert_equal 1, GC.count - c
+    ensure
+      GC.enable unless disabled
+    end
   end
 end

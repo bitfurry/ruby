@@ -765,19 +765,10 @@ VALUE rb_obj_setup(VALUE obj, VALUE klass, VALUE type);
 #define RB_NEWOBJ(obj,type) type *(obj) = (type*)rb_newobj()
 #define RB_NEWOBJ_OF(obj,type,klass,flags) type *(obj) = (type*)rb_newobj_of(klass, flags)
 #define NEWOBJ(obj,type) RB_NEWOBJ(obj,type)
-#define NEWOBJ_OF(obj,type,klass,flags) RB_NEWOBJ_OF(obj,type,klass,flags)
+#define NEWOBJ_OF(obj,type,klass,flags) RB_NEWOBJ_OF(obj,type,klass,flags) /* core has special NEWOBJ_OF() in internal.h */
 #define OBJSETUP(obj,c,t) rb_obj_setup(obj, c, t) /* use NEWOBJ_OF instead of NEWOBJ()+OBJSETUP() */
-#define RB_CLONESETUP(clone,obj) do {\
-    rb_obj_setup((clone),rb_singleton_class_clone((VALUE)(obj)),RBASIC(obj)->flags);\
-    rb_singleton_class_attached(RBASIC(clone)->klass, (VALUE)(clone));\
-    if (RB_FL_TEST((obj), RUBY_FL_EXIVAR)) rb_copy_generic_ivar((VALUE)(clone),(VALUE)(obj));\
-} while (0)
-#define RB_DUPSETUP(dup,obj) do {\
-    rb_obj_setup((dup),rb_obj_class(obj), (RBASIC(obj)->flags)&(RUBY_T_MASK|RUBY_FL_EXIVAR|RUBY_FL_TAINT)); \
-    if (RB_FL_TEST((obj), RUBY_FL_EXIVAR)) rb_copy_generic_ivar((VALUE)(dup),(VALUE)(obj));\
-} while (0)
-#define CLONESETUP(clone,obj) RB_CLONESETUP(clone,obj)
-#define DUPSETUP(dup,obj) RB_DUPSETUP(dup,obj)
+#define CLONESETUP(clone,obj) rb_clone_setup(clone,obj)
+#define DUPSETUP(dup,obj) rb_dup_setup(dup,obj)
 
 #ifndef USE_RGENGC
 #define USE_RGENGC 1
@@ -827,6 +818,50 @@ VALUE rb_obj_setup(VALUE obj, VALUE klass, VALUE type);
 #define RGENGC_WB_PROTECTED_NODE_CREF 1
 #endif
 
+enum ruby_fl_type {
+    RUBY_FL_WB_PROTECTED = (1<<5),
+    RUBY_FL_PROMOTED0 = (1<<5),
+    RUBY_FL_PROMOTED1 = (1<<6),
+    RUBY_FL_PROMOTED  = RUBY_FL_PROMOTED0|RUBY_FL_PROMOTED1,
+    RUBY_FL_FINALIZE  = (1<<7),
+    RUBY_FL_TAINT     = (1<<8),
+    RUBY_FL_UNTRUSTED = RUBY_FL_TAINT,
+    RUBY_FL_EXIVAR    = (1<<10),
+    RUBY_FL_FREEZE    = (1<<11),
+
+    RUBY_FL_USHIFT    = 12,
+
+#define RUBY_FL_USER_N(n) RUBY_FL_USER##n = (1<<(RUBY_FL_USHIFT+n))
+    RUBY_FL_USER_N(0),
+    RUBY_FL_USER_N(1),
+    RUBY_FL_USER_N(2),
+    RUBY_FL_USER_N(3),
+    RUBY_FL_USER_N(4),
+    RUBY_FL_USER_N(5),
+    RUBY_FL_USER_N(6),
+    RUBY_FL_USER_N(7),
+    RUBY_FL_USER_N(8),
+    RUBY_FL_USER_N(9),
+    RUBY_FL_USER_N(10),
+    RUBY_FL_USER_N(11),
+    RUBY_FL_USER_N(12),
+    RUBY_FL_USER_N(13),
+    RUBY_FL_USER_N(14),
+    RUBY_FL_USER_N(15),
+    RUBY_FL_USER_N(16),
+    RUBY_FL_USER_N(17),
+    RUBY_FL_USER_N(18),
+#if defined ENUM_OVER_INT || SIZEOF_INT*CHAR_BIT>12+19+1
+    RUBY_FL_USER_N(19),
+#else
+#define RUBY_FL_USER19 (((VALUE)1)<<(RUBY_FL_USHIFT+19))
+#endif
+
+    RUBY_ELTS_SHARED = RUBY_FL_USER2,
+    RUBY_FL_DUPPED = (RUBY_T_MASK|RUBY_FL_EXIVAR|RUBY_FL_TAINT),
+    RUBY_FL_SINGLETON = RUBY_FL_USER0
+};
+
 struct RBasic {
     VALUE flags;
     const VALUE klass;
@@ -839,21 +874,40 @@ struct RBasic {
 VALUE rb_obj_hide(VALUE obj);
 VALUE rb_obj_reveal(VALUE obj, VALUE klass); /* do not use this API to change klass information */
 
+#if defined(HAVE_BUILTIN___BUILTIN_CHOOSE_EXPR_CONSTANT_P)
+# define RB_OBJ_WB_UNPROTECT_FOR(type, obj) \
+    __extension__( \
+	__builtin_choose_expr( \
+	    RGENGC_WB_PROTECTED_##type, \
+	    OBJ_WB_UNPROTECT((VALUE)(obj)), ((VALUE)(obj))))
+#else
+# define RB_OBJ_WB_UNPROTECT_FOR(type, obj) \
+    (RGENGC_WB_PROTECTED_##type ? \
+     OBJ_WB_UNPROTECT((VALUE)(obj)) : ((VALUE)(obj)))
+#endif
+
 #define RBASIC_CLASS(obj) (RBASIC(obj)->klass)
 
-#define ROBJECT_EMBED_LEN_MAX 3
+#define ROBJECT_EMBED_LEN_MAX ROBJECT_EMBED_LEN_MAX
+#define ROBJECT_EMBED ROBJECT_EMBED
+enum {
+    ROBJECT_EMBED_LEN_MAX = 3,
+    ROBJECT_EMBED = RUBY_FL_USER1,
+
+    ROBJECT_ENUM_END
+};
+
 struct RObject {
     struct RBasic basic;
     union {
 	struct {
 	    long numiv; /* only uses 32-bits */
 	    VALUE *ivptr;
-            struct st_table *iv_index_tbl; /* shortcut for RCLASS_IV_INDEX_TBL(rb_obj_class(obj)) */
+            void *iv_index_tbl; /* shortcut for RCLASS_IV_INDEX_TBL(rb_obj_class(obj)) */
 	} heap;
 	VALUE ary[ROBJECT_EMBED_LEN_MAX];
     } as;
 };
-#define ROBJECT_EMBED RUBY_FL_USER1
 #define ROBJECT_NUMIV(o) \
     ((RBASIC(o)->flags & ROBJECT_EMBED) ? \
      ROBJECT_EMBED_LEN_MAX : \
@@ -879,9 +933,16 @@ struct RClass {
 #define RMODULE_CONST_TBL(m) RCLASS_CONST_TBL(m)
 #define RMODULE_M_TBL(m) RCLASS_M_TBL(m)
 #define RMODULE_SUPER(m) RCLASS_SUPER(m)
-#define RMODULE_IS_OVERLAID RUBY_FL_USER2
-#define RMODULE_IS_REFINEMENT RUBY_FL_USER3
-#define RMODULE_INCLUDED_INTO_REFINEMENT RUBY_FL_USER4
+#define RMODULE_IS_OVERLAID RMODULE_IS_OVERLAID
+#define RMODULE_IS_REFINEMENT RMODULE_IS_REFINEMENT
+#define RMODULE_INCLUDED_INTO_REFINEMENT RMODULE_INCLUDED_INTO_REFINEMENT
+enum {
+    RMODULE_IS_OVERLAID = RUBY_FL_USER2,
+    RMODULE_IS_REFINEMENT = RUBY_FL_USER3,
+    RMODULE_INCLUDED_INTO_REFINEMENT = RUBY_FL_USER4,
+
+    RMODULE_ENUM_END
+};
 
 double rb_float_value(VALUE);
 VALUE rb_float_new(double);
@@ -890,10 +951,24 @@ VALUE rb_float_new_in_heap(double);
 #define RFLOAT_VALUE(v) rb_float_value(v)
 #define DBL2NUM(dbl)  rb_float_new(dbl)
 
-#define RUBY_ELTS_SHARED RUBY_FL_USER2
+#define RUBY_ELTS_SHARED RUBY_ELTS_SHARED
 #define ELTS_SHARED RUBY_ELTS_SHARED
 
-#define RSTRING_EMBED_LEN_MAX ((int)((sizeof(VALUE)*3)/sizeof(char)-1))
+#define RSTRING_NOEMBED RSTRING_NOEMBED
+#define RSTRING_EMBED_LEN_MASK RSTRING_EMBED_LEN_MASK
+#define RSTRING_EMBED_LEN_SHIFT RSTRING_EMBED_LEN_SHIFT
+#define RSTRING_EMBED_LEN_MAX RSTRING_EMBED_LEN_MAX
+#define RSTRING_FSTR RSTRING_FSTR
+enum {
+    RSTRING_NOEMBED = RUBY_FL_USER1,
+    RSTRING_EMBED_LEN_MASK = (RUBY_FL_USER2|RUBY_FL_USER3|RUBY_FL_USER4|
+			      RUBY_FL_USER5|RUBY_FL_USER6),
+    RSTRING_EMBED_LEN_SHIFT = (RUBY_FL_USHIFT+2),
+    RSTRING_EMBED_LEN_MAX = (int)((sizeof(VALUE)*3)/sizeof(char)-1),
+    RSTRING_FSTR = RUBY_FL_USER17,
+
+    RSTRING_ENUM_END
+};
 struct RString {
     struct RBasic basic;
     union {
@@ -908,10 +983,6 @@ struct RString {
 	char ary[RSTRING_EMBED_LEN_MAX + 1];
     } as;
 };
-#define RSTRING_NOEMBED RUBY_FL_USER1
-#define RSTRING_FSTR RUBY_FL_USER17
-#define RSTRING_EMBED_LEN_MASK (RUBY_FL_USER2|RUBY_FL_USER3|RUBY_FL_USER4|RUBY_FL_USER5|RUBY_FL_USER6)
-#define RSTRING_EMBED_LEN_SHIFT (RUBY_FL_USHIFT+2)
 #define RSTRING_EMBED_LEN(str) \
      (long)((RBASIC(str)->flags >> RSTRING_EMBED_LEN_SHIFT) & \
             (RSTRING_EMBED_LEN_MASK >> RSTRING_EMBED_LEN_SHIFT))
@@ -933,7 +1004,19 @@ struct RString {
      ((ptrvar) = RSTRING(str)->as.ary, (lenvar) = RSTRING_EMBED_LEN(str)) : \
      ((ptrvar) = RSTRING(str)->as.heap.ptr, (lenvar) = RSTRING(str)->as.heap.len))
 
-#define RARRAY_EMBED_LEN_MAX 3
+#define RARRAY_EMBED_FLAG RARRAY_EMBED_FLAG
+#define RARRAY_EMBED_LEN_MASK RARRAY_EMBED_LEN_MASK
+#define RARRAY_EMBED_LEN_MAX RARRAY_EMBED_LEN_MAX
+#define RARRAY_EMBED_LEN_SHIFT RARRAY_EMBED_LEN_SHIFT
+enum {
+    RARRAY_EMBED_LEN_MAX = 3,
+    RARRAY_EMBED_FLAG = RUBY_FL_USER1,
+    /* RUBY_FL_USER2 is for ELTS_SHARED */
+    RARRAY_EMBED_LEN_MASK = (RUBY_FL_USER4|RUBY_FL_USER3),
+    RARRAY_EMBED_LEN_SHIFT = (RUBY_FL_USHIFT+3),
+
+    RARRAY_ENUM_END
+};
 struct RArray {
     struct RBasic basic;
     union {
@@ -948,22 +1031,12 @@ struct RArray {
 	const VALUE ary[RARRAY_EMBED_LEN_MAX];
     } as;
 };
-#define RARRAY_EMBED_FLAG RUBY_FL_USER1
-/* RUBY_FL_USER2 is for ELTS_SHARED */
-#define RARRAY_EMBED_LEN_MASK (RUBY_FL_USER4|RUBY_FL_USER3)
-#define RARRAY_EMBED_LEN_SHIFT (RUBY_FL_USHIFT+3)
-#define RARRAY_LEN(a) \
-    ((RBASIC(a)->flags & RARRAY_EMBED_FLAG) ? \
-     (long)((RBASIC(a)->flags >> RARRAY_EMBED_LEN_SHIFT) & \
-	 (RARRAY_EMBED_LEN_MASK >> RARRAY_EMBED_LEN_SHIFT)) : \
-     RARRAY(a)->as.heap.len)
-
+#define RARRAY_EMBED_LEN(a) \
+    (long)((RBASIC(a)->flags >> RARRAY_EMBED_LEN_SHIFT) & \
+	   (RARRAY_EMBED_LEN_MASK >> RARRAY_EMBED_LEN_SHIFT))
+#define RARRAY_LEN(a) rb_array_len(a)
 #define RARRAY_LENINT(ary) rb_long2int(RARRAY_LEN(ary))
-
-#define RARRAY_CONST_PTR(a) \
-  ((const VALUE *)((RBASIC(a)->flags & RARRAY_EMBED_FLAG) ? \
-		   RARRAY(a)->as.ary : \
-		   RARRAY(a)->as.heap.ptr))
+#define RARRAY_CONST_PTR(a) rb_array_const_ptr(a)
 
 #define RARRAY_PTR_USE_START(a) ((VALUE *)RARRAY_CONST_PTR(a))
 #define RARRAY_PTR_USE_END(a) /* */
@@ -983,7 +1056,7 @@ struct RArray {
     RARRAY_PTR_USE_END(_ary); \
 } while (0)
 
-#define RARRAY_PTR(a) ((VALUE *)RARRAY_CONST_PTR(RGENGC_WB_PROTECTED_ARRAY ? OBJ_WB_UNPROTECT((VALUE)a) : ((VALUE)a)))
+#define RARRAY_PTR(a) ((VALUE *)RARRAY_CONST_PTR(RB_OBJ_WB_UNPROTECT_FOR(ARRAY, a)))
 
 struct RRegexp {
     struct RBasic basic;
@@ -1127,7 +1200,17 @@ void *rb_check_typeddata(VALUE, const rb_data_type_t *);
 #define TypedData_Get_Struct(obj,type,data_type,sval) \
     ((sval) = (type*)rb_check_typeddata((obj), (data_type)))
 
-#define RSTRUCT_EMBED_LEN_MAX 3
+#define RSTRUCT_EMBED_LEN_MAX RSTRUCT_EMBED_LEN_MAX
+#define RSTRUCT_EMBED_LEN_MASK RSTRUCT_EMBED_LEN_MASK
+#define RSTRUCT_EMBED_LEN_SHIFT RSTRUCT_EMBED_LEN_SHIFT
+enum {
+    RSTRUCT_EMBED_LEN_MAX = 3,
+    RSTRUCT_EMBED_LEN_MASK = (RUBY_FL_USER2|RUBY_FL_USER1),
+    RSTRUCT_EMBED_LEN_SHIFT = (RUBY_FL_USHIFT+1),
+
+    RSTRUCT_ENUM_END
+};
+
 struct RStruct {
     struct RBasic basic;
     union {
@@ -1138,19 +1221,14 @@ struct RStruct {
 	const VALUE ary[RSTRUCT_EMBED_LEN_MAX];
     } as;
 };
-#define RSTRUCT_EMBED_LEN_MASK (RUBY_FL_USER2|RUBY_FL_USER1)
-#define RSTRUCT_EMBED_LEN_SHIFT (RUBY_FL_USHIFT+1)
-#define RSTRUCT_LEN(st) \
-    ((RBASIC(st)->flags & RSTRUCT_EMBED_LEN_MASK) ? \
-     (long)((RBASIC(st)->flags >> RSTRUCT_EMBED_LEN_SHIFT) & \
-            (RSTRUCT_EMBED_LEN_MASK >> RSTRUCT_EMBED_LEN_SHIFT)) : \
-     RSTRUCT(st)->as.heap.len)
+
+#define RSTRUCT_EMBED_LEN(st) \
+    (long)((RBASIC(st)->flags >> RSTRUCT_EMBED_LEN_SHIFT) & \
+	   (RSTRUCT_EMBED_LEN_MASK >> RSTRUCT_EMBED_LEN_SHIFT))
+#define RSTRUCT_LEN(st) rb_struct_len(st)
 #define RSTRUCT_LENINT(st) rb_long2int(RSTRUCT_LEN(st))
-#define RSTRUCT_CONST_PTR(st) \
-  ((RBASIC(st)->flags & RSTRUCT_EMBED_LEN_MASK) ? \
-   RSTRUCT(st)->as.ary : \
-   RSTRUCT(st)->as.heap.ptr)
-#define RSTRUCT_PTR(st) ((VALUE *)RSTRUCT_CONST_PTR(RGENGC_WB_PROTECTED_STRUCT ? OBJ_WB_UNPROTECT((VALUE)st) : (VALUE)st))
+#define RSTRUCT_CONST_PTR(st) rb_struct_const_ptr(st)
+#define RSTRUCT_PTR(st) ((VALUE *)RSTRUCT_CONST_PTR(RB_OBJ_WB_UNPROTECT_FOR(STRUCT, st)))
 
 #define RSTRUCT_SET(st, idx, v) RB_OBJ_WRITE(st, &RSTRUCT_CONST_PTR(st)[idx], (v))
 #define RSTRUCT_GET(st, idx)    (RSTRUCT_CONST_PTR(st)[idx])
@@ -1171,47 +1249,6 @@ struct RStruct {
 #define RTYPEDDATA(obj)   (R_CAST(RTypedData)(obj))
 #define RSTRUCT(obj) (R_CAST(RStruct)(obj))
 #define RFILE(obj)   (R_CAST(RFile)(obj))
-
-enum ruby_fl_type {
-    RUBY_FL_WB_PROTECTED = (1<<5),
-    RUBY_FL_PROMOTED0 = (1<<5),
-    RUBY_FL_PROMOTED1 = (1<<6),
-    RUBY_FL_FINALIZE  = (1<<7),
-    RUBY_FL_TAINT     = (1<<8),
-    RUBY_FL_UNTRUSTED = RUBY_FL_TAINT,
-    RUBY_FL_EXIVAR    = (1<<10),
-    RUBY_FL_FREEZE    = (1<<11),
-
-    RUBY_FL_USHIFT    = 12,
-
-#define RUBY_FL_USER_N(n) RUBY_FL_USER##n = (1<<(RUBY_FL_USHIFT+n))
-    RUBY_FL_USER_N(0),
-    RUBY_FL_USER_N(1),
-    RUBY_FL_USER_N(2),
-    RUBY_FL_USER_N(3),
-    RUBY_FL_USER_N(4),
-    RUBY_FL_USER_N(5),
-    RUBY_FL_USER_N(6),
-    RUBY_FL_USER_N(7),
-    RUBY_FL_USER_N(8),
-    RUBY_FL_USER_N(9),
-    RUBY_FL_USER_N(10),
-    RUBY_FL_USER_N(11),
-    RUBY_FL_USER_N(12),
-    RUBY_FL_USER_N(13),
-    RUBY_FL_USER_N(14),
-    RUBY_FL_USER_N(15),
-    RUBY_FL_USER_N(16),
-    RUBY_FL_USER_N(17),
-    RUBY_FL_USER_N(18),
-#if defined ENUM_OVER_INT || SIZEOF_INT*CHAR_BIT>12+19+1
-    RUBY_FL_USER_N(19),
-#else
-#define RUBY_FL_USER19 (((VALUE)1)<<(RUBY_FL_USHIFT+19))
-#endif
-
-    RUBY_FL_SINGLETON = RUBY_FL_USER0
-};
 
 #define FL_SINGLETON    RUBY_FL_SINGLETON
 #define FL_WB_PROTECTED RUBY_FL_WB_PROTECTED
@@ -1275,7 +1312,8 @@ enum ruby_fl_type {
     (RB_OBJ_TAINTABLE(x) && RB_FL_ABLE(s)) ? \
     RB_OBJ_INFECT_RAW(x, s) : 0)
 
-#define RB_OBJ_FROZEN(x) (RB_FL_ABLE(x) ? !!(RBASIC(x)->flags&RUBY_FL_FREEZE) : 1)
+#define RB_OBJ_FROZEN_RAW(x) (RBASIC(x)->flags&RUBY_FL_FREEZE)
+#define RB_OBJ_FROZEN(x) (!RB_FL_ABLE(x) || RB_OBJ_FROZEN_RAW(x))
 #define RB_OBJ_FREEZE_RAW(x) (RBASIC(x)->flags |= RUBY_FL_FREEZE)
 #define RB_OBJ_FREEZE(x) rb_obj_freeze_inline((VALUE)x)
 
@@ -1302,6 +1340,7 @@ enum ruby_fl_type {
 #define OBJ_UNTRUST(x) RB_OBJ_UNTRUST(x)
 #define OBJ_INFECT_RAW(x,s) RB_OBJ_INFECT_RAW(x,s)
 #define OBJ_INFECT(x,s) RB_OBJ_INFECT(x,s)
+#define OBJ_FROZEN_RAW(x) RB_OBJ_FROZEN_RAW(x)
 #define OBJ_FROZEN(x) RB_OBJ_FROZEN(x)
 #define OBJ_FREEZE_RAW(x) RB_OBJ_FREEZE_RAW(x)
 #define OBJ_FREEZE(x) RB_OBJ_FREEZE(x)
@@ -1325,6 +1364,7 @@ rb_obj_freeze_inline(VALUE x)
 # define RUBY_UNTYPED_DATA_FUNC(func) DEPRECATED(func)
 #endif
 
+#if defined(__GNUC__) && !defined(__NO_INLINE__)
 #if defined(HAVE_BUILTIN___BUILTIN_CHOOSE_EXPR_CONSTANT_P)
 RUBY_UNTYPED_DATA_FUNC(static inline VALUE rb_data_object_wrap_warning(VALUE,void*,RUBY_DATA_FUNC,RUBY_DATA_FUNC));
 #endif
@@ -1344,6 +1384,7 @@ rb_data_object_wrap_warning(VALUE klass, void *ptr, RUBY_DATA_FUNC mark, RUBY_DA
 	    rb_data_object_wrap(klass, ptr, mark, free), \
 	    rb_data_object_wrap_warning(klass, ptr, mark, free)))
 #endif
+#endif
 
 static inline void *
 rb_data_object_get(VALUE obj)
@@ -1352,11 +1393,13 @@ rb_data_object_get(VALUE obj)
     return ((struct RData *)obj)->data;
 }
 
+#if defined(__GNUC__) && !defined(__NO_INLINE__)
 static inline void *
 rb_data_object_get_warning(VALUE obj)
 {
     return rb_data_object_get(obj);
 }
+#endif
 
 static inline VALUE
 rb_data_object_make(VALUE klass, RUBY_DATA_FUNC mark_func, RUBY_DATA_FUNC free_func, void **datap, size_t size)
@@ -1390,6 +1433,7 @@ rb_data_typed_object_alloc(VALUE klass, void *datap, const rb_data_type_t *type)
 }
 #endif
 
+#if defined(__GNUC__) && !defined(__NO_INLINE__)
 #define rb_data_object_wrap_0 rb_data_object_wrap
 #define rb_data_object_wrap_1 rb_data_object_wrap_warning
 #define rb_data_object_wrap  RUBY_MACRO_SELECT(rb_data_object_wrap_, RUBY_UNTYPED_DATA_WARNING)
@@ -1399,11 +1443,10 @@ rb_data_typed_object_alloc(VALUE klass, void *datap, const rb_data_type_t *type)
 #define rb_data_object_make_0 rb_data_object_make
 #define rb_data_object_make_1 rb_data_object_make_warning
 #define rb_data_object_make   RUBY_MACRO_SELECT(rb_data_object_make_, RUBY_UNTYPED_DATA_WARNING)
+#endif
 
 #if USE_RGENGC
-#define RB_OBJ_PROMOTED_RAW(x)      (\
-	(RBASIC(x)->flags & (RUBY_FL_PROMOTED0|RUBY_FL_PROMOTED1)) == \
-	(RUBY_FL_PROMOTED0|RUBY_FL_PROMOTED1))
+#define RB_OBJ_PROMOTED_RAW(x)      RB_FL_ALL_RAW(x, RUBY_FL_PROMOTED)
 #define RB_OBJ_PROMOTED(x)          (RB_SPECIAL_CONST_P(x) ? 0 : RB_OBJ_PROMOTED_RAW(x))
 #define RB_OBJ_WB_UNPROTECT(x)      rb_obj_wb_unprotect(x, __FILE__, __LINE__)
 
@@ -1938,6 +1981,57 @@ rb_special_const_p(VALUE obj)
 #endif
 
 #include "ruby/intern.h"
+
+static inline void
+rb_clone_setup(VALUE clone, VALUE obj)
+{
+    rb_obj_setup(clone, rb_singleton_class_clone(obj), RBASIC(obj)->flags);
+    rb_singleton_class_attached(RBASIC_CLASS(clone), clone);
+    if (RB_FL_TEST(obj, RUBY_FL_EXIVAR)) rb_copy_generic_ivar(clone, obj);
+}
+
+static inline void
+rb_dup_setup(VALUE dup, VALUE obj)
+{
+    rb_obj_setup(dup, rb_obj_class(obj), RB_FL_TEST_RAW(obj, RUBY_FL_DUPPED));
+    if (RB_FL_TEST(obj, RUBY_FL_EXIVAR)) rb_copy_generic_ivar(dup, obj);
+}
+
+static inline long
+rb_array_len(VALUE a)
+{
+    return (RBASIC(a)->flags & RARRAY_EMBED_FLAG) ?
+	RARRAY_EMBED_LEN(a) : RARRAY(a)->as.heap.len;
+}
+
+#if defined(__fcc__) || defined(__fcc_version) || \
+    defined(__FCC__) || defined(__FCC_VERSION)
+/* workaround for old version of Fujitsu C Compiler (fcc) */
+# define FIX_CONST_VALUE_PTR(x) ((const VALUE *)(x))
+#else
+# define FIX_CONST_VALUE_PTR(x) (x)
+#endif
+
+static inline const VALUE *
+rb_array_const_ptr(VALUE a)
+{
+    return FIX_CONST_VALUE_PTR((RBASIC(a)->flags & RARRAY_EMBED_FLAG) ?
+	RARRAY(a)->as.ary : RARRAY(a)->as.heap.ptr);
+}
+
+static inline long
+rb_struct_len(VALUE st)
+{
+    return (RBASIC(st)->flags & RSTRUCT_EMBED_LEN_MASK) ?
+	RSTRUCT_EMBED_LEN(st) : RSTRUCT(st)->as.heap.len;
+}
+
+static inline const VALUE *
+rb_struct_const_ptr(VALUE st)
+{
+    return FIX_CONST_VALUE_PTR((RBASIC(st)->flags & RSTRUCT_EMBED_LEN_MASK) ?
+	RSTRUCT(st)->as.ary : RSTRUCT(st)->as.heap.ptr);
+}
 
 #if defined(EXTLIB) && defined(USE_DLN_A_OUT)
 /* hook for external modules */

@@ -52,6 +52,7 @@
 #include "win32/dir.h"
 #include "win32/file.h"
 #include "internal.h"
+#include "encindex.h"
 #define isdirsep(x) ((x) == '/' || (x) == '\\')
 
 #if defined _MSC_VER && _MSC_VER <= 1200
@@ -778,7 +779,7 @@ rb_w32_sysinit(int *argc, char ***argv)
     //
     // subvert cmd.exe's feeble attempt at command line parsing
     //
-    *argc = w32_cmdvector(GetCommandLineW(), argv, CP_UTF8, rb_utf8_encoding());
+    *argc = w32_cmdvector(GetCommandLineW(), argv, CP_UTF8, &OnigEncodingUTF_8);
 
     //
     // Now set up the correct time stuff
@@ -2221,11 +2222,12 @@ readdir_internal(DIR *dirp, BOOL (*conv)(const WCHAR *, const WCHAR *, struct di
 struct direct  *
 rb_w32_readdir(DIR *dirp, rb_encoding *enc)
 {
-    if (!enc || enc == rb_ascii8bit_encoding()) {
+    int idx = rb_enc_to_index(enc);
+    if (idx == ENCINDEX_ASCII) {
 	const UINT cp = filecp();
 	return readdir_internal(dirp, win32_direct_conv, &cp);
     }
-    else if (enc == rb_utf8_encoding()) {
+    else if (idx == ENCINDEX_UTF_8) {
 	const UINT cp = CP_UTF8;
 	return readdir_internal(dirp, win32_direct_conv, &cp);
     }
@@ -3267,15 +3269,22 @@ finish_overlapped_socket(BOOL input, SOCKET s, WSAOVERLAPPED *wol, int result, D
 		result = WSAGetOverlappedResult(s, wol, &size, TRUE, &flg)
 		);
 	    if (result) {
+		result = 0;
 		*len = size;
 		break;
 	    }
+	    result = SOCKET_ERROR;
 	    /* thru */
 	  default:
 	    if ((err = WSAGetLastError()) == WSAECONNABORTED && !input)
 		errno = EPIPE;
+	    else if (err == WSAEMSGSIZE && input) {
+		result = 0;
+		*len = size;
+		break;
+	    }
 	    else
-		errno = map_errno(WSAGetLastError());
+		errno = map_errno(err);
 	    /* thru */
 	  case WAIT_OBJECT_0 + 1:
 	    /* interrupted */
@@ -5162,7 +5171,7 @@ static DWORD stati64_handle(HANDLE h, struct stati64 *st);
 
 /* License: Ruby's */
 static void
-stati64_set_inode(PBY_HANDLE_FILE_INFORMATION pinfo, struct stati64 *st)
+stati64_set_inode(BY_HANDLE_FILE_INFORMATION *pinfo, struct stati64 *st)
 {
     /* struct stati64 layout
      *
@@ -5203,6 +5212,7 @@ stati64_set_inode_handle(HANDLE h, struct stati64 *st)
 }
 
 #undef fstat
+extern int fstat(int, struct stat *);
 /* License: Ruby's */
 int
 rb_w32_fstat(int fd, struct stat *st)
@@ -5973,19 +5983,7 @@ check_if_wdir(const WCHAR *wfile)
     return TRUE;
 }
 
-/* License: Ruby's */
-static int
-check_if_dir(const char *file)
-{
-    WCHAR *wfile;
-    int ret;
-
-    if (!(wfile = filecp_to_wstr(file, NULL)))
-	return FALSE;
-    ret = check_if_wdir(wfile);
-    free(wfile);
-    return ret;
-}
+static int w32_wopen(const WCHAR *file, int oflag, int perm);
 
 /* License: Ruby's */
 int
@@ -6000,16 +5998,9 @@ rb_w32_open(const char *file, int oflag, ...)
     pmode = va_arg(arg, int);
     va_end(arg);
 
-    if ((oflag & O_TEXT) || !(oflag & O_BINARY)) {
-	oflag &= ~O_SHARE_DELETE;
-	ret = _open(file, oflag, pmode);
-	if (ret == -1 && errno == EACCES) check_if_dir(file);
-	return ret;
-    }
-
     if (!(wfile = filecp_to_wstr(file, NULL)))
 	return -1;
-    ret = rb_w32_wopen(wfile, oflag, pmode);
+    ret = w32_wopen(wfile, oflag, pmode);
     free(wfile);
     return ret;
 }
@@ -6017,6 +6008,21 @@ rb_w32_open(const char *file, int oflag, ...)
 /* License: Ruby's */
 int
 rb_w32_wopen(const WCHAR *file, int oflag, ...)
+{
+    int pmode = 0;
+
+    if (oflag & O_CREAT) {
+	va_list arg;
+	va_start(arg, oflag);
+	pmode = va_arg(arg, int);
+	va_end(arg);
+    }
+
+    return w32_wopen(file, oflag, pmode);
+}
+
+static int
+w32_wopen(const WCHAR *file, int oflag, int pmode)
 {
     char flags = 0;
     int fd;
@@ -6030,11 +6036,6 @@ rb_w32_wopen(const WCHAR *file, int oflag, ...)
     share_delete = oflag & O_SHARE_DELETE ? FILE_SHARE_DELETE : 0;
     oflag &= ~O_SHARE_DELETE;
     if ((oflag & O_TEXT) || !(oflag & O_BINARY)) {
-	va_list arg;
-	int pmode;
-	va_start(arg, oflag);
-	pmode = va_arg(arg, int);
-	va_end(arg);
 	fd = _wopen(file, oflag, pmode);
 	if (fd == -1) {
 	    switch (errno) {
@@ -6103,11 +6104,6 @@ rb_w32_wopen(const WCHAR *file, int oflag, ...)
 	return -1;
     }
     if (oflag & O_CREAT) {
-	va_list arg;
-	int pmode;
-	va_start(arg, oflag);
-	pmode = va_arg(arg, int);
-	va_end(arg);
 	/* TODO: we need to check umask here, but it's not exported... */
 	if (!(pmode & S_IWRITE))
 	    attr = FILE_ATTRIBUTE_READONLY;

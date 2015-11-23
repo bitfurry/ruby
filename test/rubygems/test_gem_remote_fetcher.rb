@@ -104,7 +104,7 @@ PeIQQkFng2VVot/WAQbv3ePqWq07g1BBcwIBAg==
      "964857770053363840471912215799994973597613931991572884", 16)
 
   def setup
-    @proxies = %w[http_proxy HTTP_PROXY http_proxy_user HTTP_PROXY_USER http_proxy_pass HTTP_PROXY_PASS no_proxy NO_PROXY]
+    @proxies = %w[https_proxy http_proxy HTTP_PROXY http_proxy_user HTTP_PROXY_USER http_proxy_pass HTTP_PROXY_PASS no_proxy NO_PROXY]
     @old_proxies = @proxies.map {|k| ENV[k] }
     @proxies.each {|k| ENV[k] = nil }
 
@@ -698,6 +698,14 @@ PeIQQkFng2VVot/WAQbv3ePqWq07g1BBcwIBAg==
     assert_equal "too many redirects (#{url})", e.message
   end
 
+  def test_fetch_http_with_additional_headers
+    ENV["http_proxy"] = @proxy_uri
+    ENV["no_proxy"] = URI::parse(@server_uri).host
+    fetcher = Gem::RemoteFetcher.new nil, nil, {"X-Captain" => "murphy"}
+    @fetcher = fetcher
+    assert_equal "murphy", fetcher.fetch_path(@server_uri)
+  end
+
   def test_fetch_s3
     fetcher = Gem::RemoteFetcher.new nil
     @fetcher = fetcher
@@ -984,7 +992,9 @@ PeIQQkFng2VVot/WAQbv3ePqWq07g1BBcwIBAg==
         )
       s.mount_proc("/kill") { |req, res| s.shutdown }
       s.mount_proc("/yaml") { |req, res|
-        if @enable_yaml
+        if req["X-Captain"]
+          res.body = req["X-Captain"]
+        elsif @enable_yaml
           res.body = data
           res['Content-Type'] = 'text/plain'
           res['content-length'] = data.size

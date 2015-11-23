@@ -96,6 +96,8 @@ enum node_type {
 #define NODE_FCALL       NODE_FCALL
     NODE_VCALL,
 #define NODE_VCALL       NODE_VCALL
+    NODE_QCALL,
+#define NODE_QCALL       NODE_QCALL
     NODE_SUPER,
 #define NODE_SUPER       NODE_SUPER
     NODE_ZSUPER,
@@ -262,9 +264,7 @@ typedef struct RNode {
 /* FL     : 0..4: T_TYPES, 5: KEEP_WB, 6: PROMOTED, 7: FINALIZE, 8: TAINT, 9: UNTRUSTERD, 10: EXIVAR, 11: FREEZE */
 /* NODE_FL: 0..4: T_TYPES, 5: KEEP_WB, 6: PROMOTED, 7: NODE_FL_NEWLINE|NODE_FL_CREF_PUSHED_BY_EVAL,
  *          8..14: nd_type,
- *          15..: nd_line or
- *          15: NODE_FL_CREF_PUSHED_BY_EVAL
- *          16: NODE_FL_CREF_OMOD_SHARED
+ *          15..: nd_line
  */
 #define NODE_FL_NEWLINE              (((VALUE)1)<<7)
 
@@ -394,8 +394,8 @@ typedef struct RNode {
 #define NEW_CVASGN(v,val) NEW_NODE(NODE_CVASGN,v,val,0)
 #define NEW_CVDECL(v,val) NEW_NODE(NODE_CVDECL,v,val,0)
 #define NEW_OP_ASGN1(p,id,a) NEW_NODE(NODE_OP_ASGN1,p,id,a)
-#define NEW_OP_ASGN2(r,i,o,val) NEW_NODE(NODE_OP_ASGN2,r,val,NEW_OP_ASGN22(i,o))
-#define NEW_OP_ASGN22(i,o) NEW_NODE(NODE_OP_ASGN2,i,o,rb_id_attrset(i))
+#define NEW_OP_ASGN2(r,t,i,o,val) NEW_NODE(NODE_OP_ASGN2,r,val,NEW_OP_ASGN22(i,o,t))
+#define NEW_OP_ASGN22(i,o,t) NEW_NODE(NODE_OP_ASGN2,i,o,t)
 #define NEW_OP_ASGN_OR(i,val) NEW_NODE(NODE_OP_ASGN_OR,i,val,0)
 #define NEW_OP_ASGN_AND(i,val) NEW_NODE(NODE_OP_ASGN_AND,i,val,0)
 #define NEW_OP_CDECL(v,op,val) NEW_NODE(NODE_OP_CDECL,v,val,op)
@@ -452,7 +452,7 @@ typedef struct RNode {
 #define NEW_POSTEXE(b) NEW_NODE(NODE_POSTEXE,0,b,0)
 #define NEW_BMETHOD(b) NEW_NODE(NODE_BMETHOD,0,0,b)
 #define NEW_ATTRASGN(r,m,a) NEW_NODE(NODE_ATTRASGN,r,m,a)
-#define NEW_PRELUDE(p,b) NEW_NODE(NODE_PRELUDE,p,b,0)
+#define NEW_PRELUDE(p,b,o) NEW_NODE(NODE_PRELUDE,p,b,o)
 
 RUBY_SYMBOL_EXPORT_BEGIN
 

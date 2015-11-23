@@ -653,6 +653,7 @@ VALUE rb_ary_last(int, const VALUE *, VALUE);
 void rb_ary_set_len(VALUE, long);
 void rb_ary_delete_same(VALUE, VALUE);
 VALUE rb_ary_tmp_new_fill(long capa);
+VALUE rb_ary_at(VALUE, VALUE);
 size_t rb_ary_memsize(VALUE);
 #ifdef __GNUC__
 #define rb_ary_new_from_args(n, ...) \
@@ -716,6 +717,7 @@ void Init_ext(void);
 ID rb_id_encoding(void);
 void rb_gc_mark_encodings(void);
 rb_encoding *rb_enc_get_from_index(int index);
+rb_encoding *rb_enc_check_str(VALUE str1, VALUE str2);
 int rb_encdb_replicate(const char *alias, const char *orig);
 int rb_encdb_alias(const char *alias, const char *orig);
 int rb_encdb_dummy(const char *name);
@@ -739,6 +741,11 @@ const char *rb_builtin_class_name(VALUE x);
 PRINTF_ARGS(void rb_enc_warn(rb_encoding *enc, const char *fmt, ...), 2, 3);
 PRINTF_ARGS(void rb_enc_warning(rb_encoding *enc, const char *fmt, ...), 2, 3);
 PRINTF_ARGS(void rb_sys_enc_warning(rb_encoding *enc, const char *fmt, ...), 2, 3);
+VALUE rb_name_err_new(VALUE mesg, VALUE recv, VALUE method);
+#define rb_name_err_raise_str(mesg, recv, name) \
+    rb_exc_raise(rb_name_err_new(mesg, recv, name))
+#define rb_name_err_raise(mesg, recv, name) \
+    rb_name_err_raise_str(rb_fstring_cstr(mesg), (recv), (name))
 
 /* eval.c */
 VALUE rb_refinement_module_get_refined_class(VALUE module);
@@ -762,6 +769,7 @@ VALUE rb_file_expand_path_internal(VALUE, VALUE, int, int, VALUE);
 VALUE rb_get_path_check_to_string(VALUE, int);
 VALUE rb_get_path_check_convert(VALUE, VALUE, int);
 void Init_File(void);
+int ruby_is_fd_loadable(int fd);
 
 #ifdef RUBY_FUNCTION_NAME_STRING
 # if defined __GNUC__ && __GNUC__ >= 4
@@ -808,9 +816,19 @@ void ruby_sized_xfree(void *x, size_t size);
 
 void rb_gc_resurrect(VALUE ptr);
 
+/* optimized version of NEWOBJ() */
+#undef NEWOBJF_OF
+#undef RB_NEWOBJ_OF
+#define RB_NEWOBJ_OF(obj,type,klass,flags) \
+  type *(obj) = (type*)(((flags) & FL_WB_PROTECTED) ? \
+			rb_wb_protected_newobj_of(klass, (flags) & ~FL_WB_PROTECTED) : \
+			rb_wb_unprotected_newobj_of(klass, flags))
+#define NEWOBJ_OF(obj,type,klass,flags) RB_NEWOBJ_OF(obj,type,klass,flags)
+
 /* hash.c */
 struct st_table *rb_hash_tbl_raw(VALUE hash);
 VALUE rb_hash_has_key(VALUE hash, VALUE key);
+VALUE rb_hash_default_value(VALUE hash, VALUE key);
 VALUE rb_hash_set_default_proc(VALUE hash, VALUE proc);
 long rb_objid_hash(st_index_t index);
 st_table *rb_init_identtable(void);
@@ -952,6 +970,7 @@ void rb_obj_copy_ivar(VALUE dest, VALUE obj);
 VALUE rb_obj_equal(VALUE obj1, VALUE obj2);
 VALUE rb_class_search_ancestor(VALUE klass, VALUE super);
 double rb_num_to_dbl(VALUE val);
+VALUE rb_obj_dig(int argc, VALUE *argv, VALUE self, VALUE notfound);
 
 struct RBasicRaw {
     VALUE flags;
@@ -995,7 +1014,8 @@ ID rb_id_attrget(ID id);
 VALUE rb_proc_location(VALUE self);
 st_index_t rb_hash_proc(st_index_t hash, VALUE proc);
 int rb_block_arity(void);
-VALUE rb_block_clear_env_self(VALUE proc);
+VALUE rb_func_proc_new(rb_block_call_func_t func, VALUE val);
+VALUE rb_func_lambda_new(rb_block_call_func_t func, VALUE val);
 
 /* process.c */
 #define RB_MAX_GROUPS (65536)
@@ -1101,6 +1121,8 @@ void rb_str_fill_terminator(VALUE str, const int termlen);
 VALUE rb_str_locktmp_ensure(VALUE str, VALUE (*func)(VALUE), VALUE arg);
 #ifdef RUBY_ENCODING_H
 VALUE rb_external_str_with_enc(VALUE str, rb_encoding *eenc);
+VALUE rb_str_cat_conv_enc_opts(VALUE newstr, long ofs, const char *ptr, long len,
+			       rb_encoding *from, int ecflags, VALUE ecopts);
 #endif
 #define STR_NOEMBED      FL_USER1
 #define STR_SHARED       FL_USER2 /* = ELTS_SHARED */
@@ -1109,9 +1131,17 @@ VALUE rb_external_str_with_enc(VALUE str, rb_encoding *eenc);
 #define is_ascii_string(str) (rb_enc_str_coderange(str) == ENC_CODERANGE_7BIT)
 #define is_broken_string(str) (rb_enc_str_coderange(str) == ENC_CODERANGE_BROKEN)
 size_t rb_str_memsize(VALUE);
+VALUE rb_sym_proc_call(VALUE args, VALUE sym, int argc, const VALUE *argv, VALUE passed_proc);
+VALUE rb_sym_to_proc(VALUE sym);
+
+/* symbol.c */
+#ifdef RUBY_ENCODING_H
+VALUE rb_cstr_intern(const char *ptr, long len, rb_encoding *enc);
+#endif
 
 /* struct.c */
 VALUE rb_struct_init_copy(VALUE copy, VALUE s);
+VALUE rb_struct_lookup(VALUE s, VALUE idx);
 
 /* time.c */
 struct timeval rb_time_timeval(VALUE);
@@ -1154,6 +1184,7 @@ extern rb_encoding OnigEncodingUTF_8;
 size_t rb_generic_ivar_memsize(VALUE);
 VALUE rb_search_class_path(VALUE);
 VALUE rb_attr_delete(VALUE, ID);
+VALUE rb_ivar_lookup(VALUE obj, ID id, VALUE undef);
 
 /* version.c */
 extern VALUE ruby_engine_name;
@@ -1173,6 +1204,8 @@ void rb_vm_inc_const_missing_count(void);
 void rb_thread_mark(void *th);
 const void **rb_vm_get_insns_address_table(void);
 VALUE rb_sourcefilename(void);
+VALUE rb_source_location(int *pline);
+const char *rb_source_loc(int *pline);
 void rb_vm_pop_cfunc_frame(void);
 int rb_vm_add_root_module(ID id, VALUE module);
 void rb_vm_check_redefinition_by_prepend(VALUE klass);
@@ -1189,7 +1222,9 @@ VALUE rb_check_block_call(VALUE, ID, int, const VALUE *, rb_block_call_func_t, V
 typedef void rb_check_funcall_hook(int, VALUE, ID, int, const VALUE *, VALUE);
 VALUE rb_check_funcall_with_hook(VALUE recv, ID mid, int argc, const VALUE *argv,
 				 rb_check_funcall_hook *hook, VALUE arg);
+VALUE rb_check_funcall_default(VALUE, ID, int, const VALUE *, VALUE);
 VALUE rb_catch_protect(VALUE t, rb_block_call_func *func, VALUE data, int *stateptr);
+VALUE rb_yield_1(VALUE val);
 
 /* vm_insnhelper.c */
 VALUE rb_equal_opt(VALUE obj1, VALUE obj2);
@@ -1294,11 +1329,13 @@ extern unsigned long ruby_scan_digits(const char *str, ssize_t len, int base, si
 void rb_gc_mark_global_tbl(void);
 void rb_mark_generic_ivar(VALUE);
 VALUE rb_const_missing(VALUE klass, VALUE name);
-
-int rb_st_insert_id_and_value(VALUE obj, st_table *tbl, ID key, VALUE value);
+int rb_class_ivar_set(VALUE klass, ID vid, VALUE value);
 st_table *rb_st_copy(VALUE obj, struct st_table *orig_tbl);
 
 /* gc.c (export) */
+VALUE rb_wb_protected_newobj_of(VALUE, VALUE);
+VALUE rb_wb_unprotected_newobj_of(VALUE, VALUE);
+
 size_t rb_obj_memsize_of(VALUE);
 void rb_gc_verify_internal_consistency(void);
 
@@ -1314,6 +1351,18 @@ VALUE rb_imemo_new(enum imemo_type type, VALUE v1, VALUE v2, VALUE v3, VALUE v0)
 #endif
 
 RUBY_SYMBOL_EXPORT_END
+
+#define RUBY_DTRACE_CREATE_HOOK(name, arg) \
+    RUBY_DTRACE_HOOK(name##_CREATE, arg)
+#define RUBY_DTRACE_HOOK(name, arg) \
+do { \
+    if (UNLIKELY(RUBY_DTRACE_##name##_ENABLED())) { \
+	int dtrace_line; \
+	const char *dtrace_file = rb_source_loc(&dtrace_line); \
+	if (!dtrace_file) dtrace_file = ""; \
+	RUBY_DTRACE_##name(arg, dtrace_file, dtrace_line); \
+    } \
+} while (0)
 
 #if defined(__cplusplus)
 #if 0

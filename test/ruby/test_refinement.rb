@@ -1494,6 +1494,106 @@ class TestRefinement < Test::Unit::TestCase
     INPUT
   end
 
+  def test_reopen_refinement_module
+    assert_separately([], <<-"end;")
+      $VERBOSE = nil
+      class C
+      end
+
+      module R
+        refine C do
+          def m
+            :foo
+          end
+        end
+      end
+
+      using R
+      assert_equal(:foo, C.new.m)
+
+      module R
+        refine C do
+          def m
+            :bar
+          end
+        end
+      end
+
+      assert_equal(:bar, C.new.m, "[ruby-core:71423] [Bug #11672]")
+    end;
+  end
+
+  module MixedUsing1
+    class C
+      def foo
+        :orig_foo
+      end
+    end
+
+    module R1
+      refine C do
+        def foo
+          [:R1, super]
+        end
+      end
+    end
+
+    module_function
+
+    def foo
+      [:foo, C.new.foo]
+    end
+
+    using R1
+
+    def bar
+      [:bar, C.new.foo]
+    end
+  end
+
+  module MixedUsing2
+    class C
+      def foo
+        :orig_foo
+      end
+    end
+
+    module R1
+      refine C do
+        def foo
+          [:R1_foo, super]
+        end
+      end
+    end
+
+    module R2
+      refine C do
+        def bar
+          [:R2_bar, C.new.foo]
+        end
+
+        using R1
+
+        def baz
+          [:R2_baz, C.new.foo]
+        end
+      end
+    end
+
+    using R2
+    module_function
+    def f1; C.new.bar; end
+    def f2; C.new.baz; end
+  end
+
+  def test_mixed_using
+    assert_equal([:foo, :orig_foo], MixedUsing1.foo)
+    assert_equal([:bar, [:R1, :orig_foo]], MixedUsing1.bar)
+
+    assert_equal([:R2_bar, :orig_foo], MixedUsing2.f1)
+    assert_equal([:R2_baz, [:R1_foo, :orig_foo]], MixedUsing2.f2)
+  end
+
   private
 
   def eval_using(mod, s)

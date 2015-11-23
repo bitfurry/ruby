@@ -1724,6 +1724,8 @@ dependencies: []
     class << Gem
       alias orig_default_ext_dir_for default_ext_dir_for
 
+      remove_method :default_ext_dir_for
+
       def Gem.default_ext_dir_for(base_dir)
         'elsewhere'
       end
@@ -2033,6 +2035,8 @@ dependencies: []
   def test_require_paths_default_ext_dir_for
     class << Gem
       send :alias_method, :orig_default_ext_dir_for, :default_ext_dir_for
+
+      remove_method :default_ext_dir_for
     end
 
     def Gem.default_ext_dir_for base_dir
@@ -2122,6 +2126,27 @@ dependencies: []
     assert_equal expected_so, @ext.to_fullpath("ext.#{ext}")
 
     assert_nil @ext.to_fullpath("notexist")
+  end
+
+  def test_fullpath_return_rb_extension_file_when_exist_the_same_name_file
+    ext_spec
+
+    @ext.require_paths = 'lib'
+
+    dir = File.join(@gemhome, 'gems', @ext.original_name, 'lib')
+    expected_rb = File.join(dir, 'code.rb')
+    FileUtils.mkdir_p dir
+    FileUtils.touch expected_rb
+
+    dir = @ext.extension_dir
+    ext = RbConfig::CONFIG["DLEXT"]
+    expected_so = File.join(dir, "code.#{ext}")
+    FileUtils.mkdir_p dir
+    FileUtils.touch expected_so
+
+    @ext.activate
+
+    assert_equal expected_rb, @ext.to_fullpath("code")
   end
 
   def test_require_already_activated
@@ -2866,6 +2891,46 @@ http://spdx.org/licenses or 'Nonstandard' for a nonstandard license.
 
     assert_match <<-warning, @ui.error
 WARNING: license value 'BSD' is invalid.  Use a license identifier from
+http://spdx.org/licenses or 'Nonstandard' for a nonstandard license.
+    warning
+  end
+
+  def test_validate_license_values_plus
+    util_setup_validate
+
+    use_ui @ui do
+      @a1.licenses = ['GPL-2.0+']
+      @a1.validate
+    end
+
+    assert_empty @ui.error
+  end
+
+  def test_validate_license_values_with
+    util_setup_validate
+
+    use_ui @ui do
+      @a1.licenses = ['GPL-2.0+ WITH Autoconf-exception-2.0']
+      @a1.validate
+    end
+
+    assert_empty @ui.error
+  end
+
+  def test_validate_license_with_nonsense_suffix
+    util_setup_validate
+
+    use_ui @ui do
+      @a1.licenses = ['GPL-2.0+ FOO', 'GPL-2.0 FOO']
+      @a1.validate
+    end
+
+    assert_match <<-warning, @ui.error
+WARNING: license value 'GPL-2.0+ FOO' is invalid.  Use a license identifier from
+http://spdx.org/licenses or 'Nonstandard' for a nonstandard license.
+    warning
+    assert_match <<-warning, @ui.error
+WARNING: license value 'GPL-2.0 FOO' is invalid.  Use a license identifier from
 http://spdx.org/licenses or 'Nonstandard' for a nonstandard license.
     warning
   end

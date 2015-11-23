@@ -132,7 +132,6 @@ module MakeMakefile
   $mingw = /mingw/ =~ RUBY_PLATFORM
   $cygwin = /cygwin/ =~ RUBY_PLATFORM
   $netbsd = /netbsd/ =~ RUBY_PLATFORM
-  $os2 = /os2/ =~ RUBY_PLATFORM
   $beos = /beos/ =~ RUBY_PLATFORM
   $haiku = /haiku/ =~ RUBY_PLATFORM
   $solaris = /solaris/ =~ RUBY_PLATFORM
@@ -468,7 +467,7 @@ MSG
     end
   end
 
-  def link_command(ldflags, opt="", libpath=$LIBPATH|$DEFLIBPATH)
+  def link_command(ldflags, opt="", libpath=$DEFLIBPATH|$LIBPATH)
     librubyarg = $extmk ? $LIBRUBYARG_STATIC : "$(LIBRUBYARG)"
     conf = RbConfig::CONFIG.merge('hdrdir' => $hdrdir.quote,
                                   'src' => "#{CONFTEST_C}",
@@ -504,7 +503,7 @@ MSG
                      conf)
   end
 
-  def libpathflag(libpath=$LIBPATH|$DEFLIBPATH)
+  def libpathflag(libpath=$DEFLIBPATH|$LIBPATH)
     libpath.map{|x|
       case x
       when "$(topdir)", /\A\./
@@ -2180,7 +2179,7 @@ RULES
   #
   def create_makefile(target, srcprefix = nil)
     $target = target
-    libpath = $LIBPATH|$DEFLIBPATH
+    libpath = $DEFLIBPATH|$LIBPATH
     message "creating Makefile\n"
     MakeMakefile.rm_f "#{CONFTEST}*"
     if CONFIG["DLEXT"] == $OBJEXT
@@ -2261,7 +2260,7 @@ RULES
     conf = yield(conf) if block_given?
     mfile.puts(conf)
     mfile.print "
-libpath = #{($LIBPATH|$DEFLIBPATH).join(" ")}
+libpath = #{($DEFLIBPATH|$LIBPATH).join(" ")}
 LIBPATH = #{libpath}
 DEFFILE = #{deffile}
 
@@ -2575,8 +2574,6 @@ MESSAGE
   case
   when $mswin
     $nmake = ?m if /nmake/i =~ make
-  when $bccwin
-    $nmake = ?b if /Borland/i =~ `#{make} -h`
   end
   $ignore_error = $nmake ? '' : ' 2> /dev/null || true'
 

@@ -9,13 +9,18 @@
 
 **********************************************************************/
 
-#ifndef RUBY_COMPILE_H
-#define RUBY_COMPILE_H
+#ifndef RUBY_ISEQ_H
+#define RUBY_ISEQ_H 1
+
+#ifndef rb_iseq_t
+typedef struct rb_iseq_struct rb_iseq_t;
+#define rb_iseq_t rb_iseq_t
+#endif
 
 static inline size_t
 rb_call_info_kw_arg_bytes(int keyword_len)
 {
-    return sizeof(rb_call_info_kw_arg_t) + sizeof(VALUE) * (keyword_len - 1);
+    return sizeof(struct rb_call_info_kw_arg) + sizeof(VALUE) * (keyword_len - 1);
 }
 
 RUBY_SYMBOL_EXPORT_BEGIN
@@ -62,6 +67,7 @@ struct rb_compile_option_struct {
     int stack_caching;
     int trace_instruction;
     int frozen_string_literal;
+    int frozen_string_literal_debug;
     int debug_level;
 };
 
@@ -137,6 +143,8 @@ struct iseq_compile_data {
     int last_coverable_line;
     int label_no;
     int node_level;
+    unsigned int ci_index;
+    unsigned int ci_kw_index;
     const rb_compile_option_t *option;
 #if SUPPORT_JOKE
     st_table *labels_table;
@@ -166,7 +174,8 @@ enum defined_type {
 };
 
 VALUE rb_iseq_defined_string(enum defined_type type);
+void rb_iseq_make_compile_option(struct rb_compile_option_struct *option, VALUE opt);
 
 RUBY_SYMBOL_EXPORT_END
 
-#endif /* RUBY_COMPILE_H */
+#endif /* RUBY_ISEQ_H */

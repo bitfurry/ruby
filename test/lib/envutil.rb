@@ -3,12 +3,6 @@ require "open3"
 require "timeout"
 require_relative "find_executable"
 
-def File.mkfifo(fn)
-  raise NotImplementedError, "does not support fifo" if /mswin|mingw|bccwin/ =~ RUBY_PLATFORM
-  ret = system("mkfifo", fn)
-  raise NotImplementedError, "mkfifo fails" if !ret
-end
-
 module EnvUtil
   def rubybin
     if ruby = ENV["RUBY"]
@@ -336,11 +330,11 @@ module Test
           full_message << "pid #{pid}"
           full_message << " killed by #{sigdesc}" if sigdesc
           if out and !out.empty?
-            full_message << "\n#{out.gsub(/^/, '| ')}"
+            full_message << "\n#{out.b.gsub(/^/, '| ')}"
             full_message << "\n" if /\n\z/ !~ full_message
           end
           if log
-            full_message << "\n#{log.gsub(/^/, '| ')}"
+            full_message << "\n#{log.b.gsub(/^/, '| ')}"
           end
           full_message
         end
@@ -357,22 +351,19 @@ module Test
           raise "test_stderr ignored, use block only or without block" if test_stderr != []
           yield(stdout.lines.map {|l| l.chomp }, stderr.lines.map {|l| l.chomp }, status)
         else
-          errs = []
-          [[test_stdout, stdout], [test_stderr, stderr]].each do |exp, act|
-            begin
-              if exp.is_a?(Regexp)
-                assert_match(exp, act, message)
-              elsif exp.all? {|e| String === e}
-                assert_equal(exp, act.lines.map {|l| l.chomp }, message)
-              else
-                assert_pattern_list(exp, act, message)
+          all_assertions(message) do |a|
+            [["stdout", test_stdout, stdout], ["stderr", test_stderr, stderr]].each do |key, exp, act|
+              a.for(key) do
+                if exp.is_a?(Regexp)
+                  assert_match(exp, act)
+                elsif exp.all? {|e| String === e}
+                  assert_equal(exp, act.lines.map {|l| l.chomp })
+                else
+                  assert_pattern_list(exp, act)
+                end
               end
-            rescue MiniTest::Assertion => e
-              errs << e.message
-              message = nil
             end
           end
-          raise MiniTest::Assertion, errs.join("\n---\n") unless errs.empty?
           status
         end
       end

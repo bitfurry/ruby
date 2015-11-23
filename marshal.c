@@ -109,6 +109,8 @@ typedef struct {
 
 static st_table *compat_allocator_tbl;
 static VALUE compat_allocator_tbl_wrapper;
+static VALUE rb_marshal_dump_limited(VALUE obj, VALUE port, int limit);
+static VALUE rb_marshal_load_with_proc(VALUE port, VALUE proc);
 
 static int
 mark_marshal_compat_i(st_data_t key, st_data_t value)
@@ -148,7 +150,7 @@ rb_marshal_define_compat(VALUE newclass, VALUE oldclass, VALUE (*dumper)(VALUE),
 }
 
 #define MARSHAL_INFECTION FL_TAINT
-typedef char ruby_check_marshal_viral_flags[MARSHAL_INFECTION == (int)MARSHAL_INFECTION ? 1 : -1];
+STATIC_ASSERT(marshal_infection_is_int, MARSHAL_INFECTION == (int)MARSHAL_INFECTION);
 
 struct dump_arg {
     VALUE str, dest;
@@ -165,15 +167,19 @@ struct dump_call_arg {
     int limit;
 };
 
-static void
-check_dump_arg(struct dump_arg *arg, const char *name)
+static VALUE
+check_dump_arg(VALUE ret, struct dump_arg *arg, const char *name)
 {
     if (!arg->symbols) {
         rb_raise(rb_eRuntimeError, "Marshal.dump reentered at %s",
 		 name);
     }
+    return ret;
 }
-#define check_dump_arg(arg, sym) check_dump_arg(arg, name_##sym)
+#define dump_funcall(arg, obj, sym, argc, argv) \
+    check_dump_arg(rb_funcallv(obj, sym, argc, argv), arg, name_##sym)
+#define dump_check_funcall(arg, obj, sym, argc, argv) \
+    check_dump_arg(rb_check_funcall(obj, sym, argc, argv), arg, name_##sym)
 
 static void clear_dump_arg(struct dump_arg *arg);
 
@@ -712,8 +718,7 @@ w_object(VALUE obj, struct dump_arg *arg, int limit)
 	if (rb_obj_respond_to(obj, s_mdump, TRUE)) {
 	    st_add_direct(arg->data, obj, arg->data->num_entries);
 
-	    v = rb_funcall2(obj, s_mdump, 0, 0);
-	    check_dump_arg(arg, s_mdump);
+	    v = dump_funcall(arg, obj, s_mdump, 0, 0);
 	    w_class(TYPE_USRMARSHAL, obj, arg, FALSE);
 	    w_object(v, arg, limit);
 	    return;
@@ -724,8 +729,7 @@ w_object(VALUE obj, struct dump_arg *arg, int limit)
 	    VALUE encname2;
 
 	    v = INT2NUM(limit);
-	    v = rb_funcall2(obj, s_dump, 1, &v);
-	    check_dump_arg(arg, s_dump);
+	    v = dump_funcall(arg, obj, s_dump, 1, &v);
 	    if (!RB_TYPE_P(v, T_STRING)) {
 		rb_raise(rb_eTypeError, "_dump() must return string");
 	    }
@@ -907,8 +911,7 @@ w_object(VALUE obj, struct dump_arg *arg, int limit)
 			     "no _dump_data is defined for class %"PRIsVALUE,
 			     rb_obj_class(obj));
 		}
-		v = rb_funcall2(obj, s_dump_data, 0, 0);
-		check_dump_arg(arg, s_dump_data);
+		v = dump_funcall(arg, obj, s_dump_data, 0, 0);
 		w_class(TYPE_DATA, obj, arg, TRUE);
 		w_object(v, arg, limit);
 	    }
@@ -990,8 +993,6 @@ marshal_dump(int argc, VALUE *argv)
 {
     VALUE obj, port, a1, a2;
     int limit = -1;
-    struct dump_arg *arg;
-    VALUE wrapper; /* used to avoid memory leak in case of exception */
 
     port = Qnil;
     rb_scan_args(argc, argv, "12", &obj, &a1, &a2);
@@ -1005,6 +1006,15 @@ marshal_dump(int argc, VALUE *argv)
 	else if (NIL_P(a1)) io_needed();
 	else port = a1;
     }
+    return rb_marshal_dump_limited(obj, port, limit);
+}
+
+VALUE
+rb_marshal_dump_limited(VALUE obj, VALUE port, int limit)
+{
+    struct dump_arg *arg;
+    VALUE wrapper; /* used to avoid memory leak in case of exception */
+
     wrapper = TypedData_Make_Struct(rb_cData, struct dump_arg, &dump_arg_data, arg);
     arg->dest = 0;
     arg->symbols = st_init_numtable();
@@ -1018,9 +1028,7 @@ marshal_dump(int argc, VALUE *argv)
 	    io_needed();
 	}
 	arg->dest = port;
-	if (rb_check_funcall(port, s_binmode, 0, 0) != Qundef) {
-	    check_dump_arg(arg, s_binmode);
-	}
+	dump_check_funcall(arg, port, s_binmode, 0, 0);
     }
     else {
 	port = arg->str;
@@ -1053,15 +1061,17 @@ struct load_arg {
     int infection;
 };
 
-static void
-check_load_arg(struct load_arg *arg, const char *name)
+static VALUE
+check_load_arg(VALUE ret, struct load_arg *arg, const char *name)
 {
     if (!arg->symbols) {
         rb_raise(rb_eRuntimeError, "Marshal.load reentered at %s",
 		 name);
     }
+    return ret;
 }
-#define check_load_arg(arg, sym) check_load_arg(arg, name_##sym)
+#define load_funcall(arg, obj, sym, argc, argv) \
+    check_load_arg(rb_funcallv(obj, sym, argc, argv), arg, name_##sym)
 
 static void clear_load_arg(struct load_arg *arg);
 
@@ -1124,9 +1134,7 @@ r_byte1_buffered(struct load_arg *arg)
 	long readable = arg->readable < BUFSIZ ? arg->readable : BUFSIZ;
 	VALUE str, n = LONG2NUM(readable);
 
-	str = rb_funcall2(arg->src, s_read, 1, &n);
-
-	check_load_arg(arg, s_read);
+	str = load_funcall(arg, arg->src, s_read, 1, &n);
 	if (NIL_P(str)) too_short();
 	StringValue(str);
 	arg->infection |= (int)FL_TEST(str, MARSHAL_INFECTION);
@@ -1156,8 +1164,7 @@ r_byte(struct load_arg *arg)
 	    c = r_byte1_buffered(arg);
 	}
 	else {
-	    VALUE v = rb_funcall2(arg->src, s_getbyte, 0, 0);
-	    check_load_arg(arg, s_getbyte);
+	    VALUE v = load_funcall(arg, arg->src, s_getbyte, 0, 0);
 	    if (NIL_P(v)) rb_eof_error();
 	    c = (unsigned char)NUM2CHR(v);
 	}
@@ -1218,8 +1225,7 @@ r_bytes1(long len, struct load_arg *arg)
 {
     VALUE str, n = LONG2NUM(len);
 
-    str = rb_funcall2(arg->src, s_read, 1, &n);
-    check_load_arg(arg, s_read);
+    str = load_funcall(arg, arg->src, s_read, 1, &n);
     if (NIL_P(str)) too_short();
     StringValue(str);
     if (RSTRING_LEN(str) != len) too_short();
@@ -1247,9 +1253,7 @@ r_bytes1_buffered(long len, struct load_arg *arg)
 	readable = readable < BUFSIZ ? readable : BUFSIZ;
 	read_len = need_len > readable ? need_len : readable;
 	n = LONG2NUM(read_len);
-	tmp = rb_funcall2(arg->src, s_read, 1, &n);
-
-	check_load_arg(arg, s_read);
+	tmp = load_funcall(arg, arg->src, s_read, 1, &n);
 	if (NIL_P(tmp)) too_short();
 	StringValue(tmp);
 
@@ -1434,8 +1438,7 @@ static VALUE
 r_post_proc(VALUE v, struct load_arg *arg)
 {
     if (arg->proc) {
-	v = rb_funcall(arg->proc, s_call, 1, v);
-	check_load_arg(arg, s_call);
+	v = load_funcall(arg, arg->proc, s_call, 1, &v);
     }
     return v;
 }
@@ -1839,8 +1842,7 @@ r_object0(struct load_arg *arg, int *ivp, VALUE extmod)
 		r_ivar(data, NULL, arg);
 		*ivp = FALSE;
 	    }
-	    v = rb_funcall2(klass, s_load, 1, &data);
-	    check_load_arg(arg, s_load);
+	    v = load_funcall(arg, klass, s_load, 1, &data);
 	    v = r_entry(v, arg);
             v = r_leave(v, arg);
 	}
@@ -1864,8 +1866,7 @@ r_object0(struct load_arg *arg, int *ivp, VALUE extmod)
 	    }
 	    v = r_entry(v, arg);
 	    data = r_object(arg);
-	    rb_funcall2(v, s_mload, 1, &data);
-	    check_load_arg(arg, s_mload);
+	    load_funcall(arg, v, s_mload, 1, &data);
 	    v = r_fixup_compat(v, arg);
 	    v = r_copy_ivar(v, data);
 	    v = r_post_proc(v, arg);
@@ -1907,8 +1908,7 @@ r_object0(struct load_arg *arg, int *ivp, VALUE extmod)
 			 name);
 	    }
 	    r = r_object0(arg, 0, extmod);
-	    rb_funcall2(v, s_load_data, 1, &r);
-	    check_load_arg(arg, s_load_data);
+	    load_funcall(arg, v, s_load_data, 1, &r);
 	    v = r_leave(v, arg);
 	}
 	break;
@@ -2014,12 +2014,21 @@ static VALUE
 marshal_load(int argc, VALUE *argv)
 {
     VALUE port, proc;
+
+    rb_check_arity(argc, 1, 2);
+    port = argv[0];
+    proc = argc > 1 ? argv[1] : Qnil;
+    return rb_marshal_load_with_proc(port, proc);
+}
+
+VALUE
+rb_marshal_load_with_proc(VALUE port, VALUE proc)
+{
     int major, minor, infection = 0;
     VALUE v;
     VALUE wrapper; /* used to avoid memory leak in case of exception */
     struct load_arg *arg;
 
-    rb_scan_args(argc, argv, "11", &port, &proc);
     v = rb_check_string_type(port);
     if (!NIL_P(v)) {
 	infection = (int)FL_TEST(port, MARSHAL_INFECTION); /* original taintedness */
@@ -2221,17 +2230,11 @@ Init_marshal(void)
 VALUE
 rb_marshal_dump(VALUE obj, VALUE port)
 {
-    int argc = 1;
-    VALUE argv[2];
-
-    argv[0] = obj;
-    argv[1] = port;
-    if (!NIL_P(port)) argc = 2;
-    return marshal_dump(argc, argv);
+    return rb_marshal_dump_limited(obj, port, -1);
 }
 
 VALUE
 rb_marshal_load(VALUE port)
 {
-    return marshal_load(1, &port);
+    return rb_marshal_load_with_proc(port, Qnil);
 }

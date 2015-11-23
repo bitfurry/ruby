@@ -33,6 +33,9 @@
 #if defined(HAVE_SYS_TIME_H)
 #include <sys/time.h>
 #endif
+#if defined(__HAIKU__)
+#include <kernel/OS.h>
+#endif
 
 static void native_mutex_lock(rb_nativethread_lock_t *lock);
 static void native_mutex_unlock(rb_nativethread_lock_t *lock);
@@ -497,6 +500,8 @@ size_t pthread_get_stacksize_np(pthread_t);
 #define STACKADDR_AVAILABLE 1
 #elif defined HAVE_PTHREAD_GETTHRDS_NP
 #define STACKADDR_AVAILABLE 1
+#elif defined __HAIKU__
+#define STACKADDR_AVAILABLE 1
 #elif defined __ia64 && defined _HPUX_SOURCE
 #include <sys/dyntune.h>
 
@@ -614,6 +619,13 @@ get_stack(void **addr, size_t *size)
 				   &reg, &regsiz));
     *addr = thinfo.__pi_stackaddr;
     *size = thinfo.__pi_stacksize;
+    STACK_DIR_UPPER((void)0, (void)(*addr = (char *)*addr + *size));
+#elif defined __HAIKU__
+    thread_info info;
+    STACK_GROW_DIR_DETECTION;
+    CHECK_ERR(get_thread_info(find_thread(NULL), &info));
+    *addr = info.stack_base;
+    *size = (uintptr_t)info.stack_end - (uintptr_t)info.stack_base;
     STACK_DIR_UPPER((void)0, (void)(*addr = (char *)*addr + *size));
 #else
 #error STACKADDR_AVAILABLE is defined but not implemented.
@@ -1012,6 +1024,7 @@ native_thread_create(rb_thread_t *th)
     return err;
 }
 
+#if USE_SLEEPY_TIMER_THREAD
 static void
 native_thread_join(pthread_t th)
 {
@@ -1020,6 +1033,7 @@ native_thread_join(pthread_t th)
 	rb_raise(rb_eThreadError, "native_thread_join() failed (%d)", err);
     }
 }
+#endif
 
 
 #if USE_NATIVE_THREAD_PRIORITY
@@ -1644,10 +1658,12 @@ rb_thread_create_timer_thread(void)
 	if (err != 0) {
 	    rb_warn("pthread_create failed for timer: %s, scheduling broken",
 		    strerror(err));
+#if USE_SLEEPY_TIMER_THREAD
 	    CLOSE_INVALIDATE(normal[0]);
 	    CLOSE_INVALIDATE(normal[1]);
 	    CLOSE_INVALIDATE(low[0]);
 	    CLOSE_INVALIDATE(low[1]);
+#endif
 	    return;
 	}
 	timer_thread.created = 1;
@@ -1664,6 +1680,7 @@ native_stop_timer_thread(void)
     stopped = --system_working <= 0;
 
     if (TT_DEBUG) fprintf(stderr, "stop timer thread\n");
+#if USE_SLEEPY_TIMER_THREAD
     if (stopped) {
 	/* prevent wakeups from signal handler ASAP */
 	timer_thread_pipe.owner_process = 0;
@@ -1691,6 +1708,7 @@ native_stop_timer_thread(void)
 	if (TT_DEBUG) fprintf(stderr, "joined timer thread\n");
 	timer_thread.created = 0;
     }
+#endif
     return stopped;
 }
 

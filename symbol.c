@@ -30,53 +30,6 @@ static ID register_static_symid_str(ID, VALUE);
 
 #define is_identchar(p,e,enc) (rb_enc_isalnum((unsigned char)(*(p)),(enc)) || (*(p)) == '_' || !ISASCII(*(p)))
 
-#define tUPLUS  RUBY_TOKEN(UPLUS)
-#define tUMINUS RUBY_TOKEN(UMINUS)
-#define tPOW    RUBY_TOKEN(POW)
-#define tCMP    RUBY_TOKEN(CMP)
-#define tEQ     RUBY_TOKEN(EQ)
-#define tEQQ    RUBY_TOKEN(EQQ)
-#define tNEQ    RUBY_TOKEN(NEQ)
-#define tGEQ    RUBY_TOKEN(GEQ)
-#define tLEQ    RUBY_TOKEN(LEQ)
-#define tMATCH  RUBY_TOKEN(MATCH)
-#define tNMATCH RUBY_TOKEN(NMATCH)
-#define tDOT2   RUBY_TOKEN(DOT2)
-#define tDOT3   RUBY_TOKEN(DOT3)
-#define tAREF   RUBY_TOKEN(AREF)
-#define tASET   RUBY_TOKEN(ASET)
-#define tLSHFT  RUBY_TOKEN(LSHFT)
-#define tRSHFT  RUBY_TOKEN(RSHFT)
-#define tCOLON2 RUBY_TOKEN(COLON2)
-#define tANDOP  RUBY_TOKEN(ANDOP)
-#define tOROP   RUBY_TOKEN(OROP)
-
-static const struct {
-    unsigned short token;
-    const char name[3], term;
-} op_tbl[] = {
-    {tDOT2,	".."},
-    {tDOT3,	"..."},
-    {tPOW,	"**"},
-    {tUPLUS,	"+@"},
-    {tUMINUS,	"-@"},
-    {tCMP,	"<=>"},
-    {tGEQ,	">="},
-    {tLEQ,	"<="},
-    {tEQ,	"=="},
-    {tEQQ,	"==="},
-    {tNEQ,	"!="},
-    {tMATCH,	"=~"},
-    {tNMATCH,	"!~"},
-    {tAREF,	"[]"},
-    {tASET,	"[]="},
-    {tLSHFT,	"<<"},
-    {tRSHFT,	">>"},
-    {tCOLON2,   "::"},
-    {tANDOP,    "&&"},
-    {tOROP,     "||"},
-};
-
 #define op_tbl_count numberof(op_tbl)
 STATIC_ASSERT(op_tbl_name_size, sizeof(op_tbl[0].name) == 3);
 #define op_tbl_len(i) (!op_tbl[i].name[1] ? 1 : !op_tbl[i].name[2] ? 2 : 3)
@@ -463,9 +416,7 @@ register_static_symid_str(ID id, VALUE str)
     OBJ_FREEZE(str);
     str = rb_fstring(str);
 
-    if (RUBY_DTRACE_SYMBOL_CREATE_ENABLED()) {
-	RUBY_DTRACE_SYMBOL_CREATE(RSTRING_PTR(str), rb_sourcefile(), rb_sourceline());
-    }
+    RUBY_DTRACE_CREATE_HOOK(SYMBOL, RSTRING_PTR(str));
 
     register_sym(str, sym);
     set_id_entry(num, str, sym);
@@ -532,9 +483,7 @@ dsymbol_alloc(const VALUE klass, const VALUE str, rb_encoding * const enc, const
     register_sym(str, dsym);
     rb_hash_aset(global_symbols.dsymbol_fstr_hash, str, Qtrue);
 
-    if (RUBY_DTRACE_SYMBOL_CREATE_ENABLED()) {
-	RUBY_DTRACE_SYMBOL_CREATE(RSTRING_PTR(RSYMBOL(dsym)->fstr), rb_sourcefile(), rb_sourceline());
-    }
+    RUBY_DTRACE_CREATE_HOOK(SYMBOL, RSTRING_PTR(RSYMBOL(dsym)->fstr));
 
     return dsym;
 }
@@ -725,13 +674,14 @@ rb_str_intern(VALUE str)
 #if USE_SYMBOL_GC
     enc = rb_enc_get(str);
     ascii = rb_usascii_encoding();
-    if (enc != ascii) {
-	if (sym_check_asciionly(str)) {
-	    str = rb_str_dup(str);
-	    rb_enc_associate(str, ascii);
-	    OBJ_FREEZE(str);
-	    enc = ascii;
-	}
+    if (enc != ascii && sym_check_asciionly(str)) {
+	str = rb_str_dup(str);
+	rb_enc_associate(str, ascii);
+	OBJ_FREEZE(str);
+	enc = ascii;
+    }
+    else {
+	str = rb_str_new_frozen(str);
     }
     str = rb_fstring(str);
     type = rb_str_symname_type(str, IDSET_ATTRSET_FOR_INTERN);
@@ -1062,6 +1012,14 @@ rb_check_symbol_cstr(const char *ptr, long len, rb_encoding *enc)
     }
 
     return Qnil;
+}
+
+VALUE
+rb_cstr_intern(const char *ptr, long len, rb_encoding *enc)
+{
+    struct RString fake_str;
+    const VALUE name = rb_setup_fake_str(&fake_str, ptr, len, enc);
+    return rb_str_intern(name);
 }
 
 static ID

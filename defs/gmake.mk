@@ -18,7 +18,7 @@ ifeq ($(if $(filter all main exts enc trans libencs libenc libtrans \
 		    wprogram rubyw rubyw$(EXEEXT) \
 		    miniruby$(EXEEXT) mini,\
 	     $(MAKECMDGOALS)),,$(MAKECMDGOALS)),)
--include showflags
+-include $(SHOWFLAGS)
 endif
 
 ifneq ($(filter universal-%,$(arch)),)
@@ -46,10 +46,11 @@ yes-btest-ruby: $(TEST_DEPENDS) yes-test-sample
 yes-test-sample: $(TEST_DEPENDS)
 endif
 ifneq ($(filter $(CHECK_TARGETS),$(MAKECMDGOALS)) $(filter test-all,$(TEST_TARGETS)),)
-yes-test-all yes-test-ruby: $(filter-out %test-all %test-ruby check%,$(TEST_TARGETS))
+yes-test-testframework yes-test-almost yes-test-ruby: $(filter-out %test-all %test-ruby check%,$(TEST_TARGETS))
 endif
 ifneq ($(filter $(CHECK_TARGETS),$(MAKECMDGOALS))$(if $(filter test-all,$(MAKECMDGOALS)),$(filter test-knownbug,$(MAKECMDGOALS))),)
-yes-test-all yes-test-ruby: yes-test-knownbug
+yes-test-testframework yes-test-almost yes-test-ruby: yes-test-knownbug
+yes-test-almost: yes-test-testframework
 endif
 
 $(TEST_TARGETS): $(TEST_DEPENDS)

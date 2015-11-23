@@ -85,7 +85,7 @@ char *getenv();
 # endif
 #endif
 
-#if defined(__BEOS__) || defined(__HAIKU__)
+#if defined(__BEOS__)
 # include <image.h>
 #endif
 
@@ -106,7 +106,7 @@ dln_loaderror(const char *format, ...)
 # define USE_DLN_DLOPEN
 #endif
 
-#if defined(__hp9000s300) || ((defined(__NetBSD__) || defined(__FreeBSD__) || defined(__OpenBSD__)) && !defined(__ELF__)) || defined(__BORLANDC__) || defined(NeXT) || defined(__WATCOMC__) || defined(MACOSX_DYLD)
+#if defined(__hp9000s300) || ((defined(__NetBSD__) || defined(__FreeBSD__) || defined(__OpenBSD__)) && !defined(__ELF__)) || defined(NeXT) || defined(MACOSX_DYLD)
 # define EXTERNAL_PREFIX "_"
 #else
 # define EXTERNAL_PREFIX ""
@@ -1117,12 +1117,12 @@ dln_sym(const char *name)
 #endif
 #endif
 
-#if defined _WIN32 && !defined __CYGWIN__
+#ifdef _WIN32
 #include <windows.h>
 #include <imagehlp.h>
 #endif
 
-#if defined _WIN32 && !defined __CYGWIN__
+#ifdef _WIN32
 static const char *
 dln_strerror(char *message, size_t size)
 {
@@ -1254,7 +1254,7 @@ dln_load(const char *file)
 #define DLN_ERROR() (error = dln_strerror(), strcpy(ALLOCA_N(char, strlen(error) + 1), error))
 #endif
 
-#if defined _WIN32 && !defined __CYGWIN__
+#if defined _WIN32
     HINSTANCE handle;
     WCHAR *winfile;
     char message[1024];
@@ -1442,7 +1442,7 @@ dln_load(const char *file)
     }
 #endif
 
-#if defined(__BEOS__) || defined(__HAIKU__)
+#if defined(__BEOS__)
 # define DLN_DEFINED
     {
       status_t err_stat;  /* BeOS error status code */
@@ -1488,7 +1488,7 @@ dln_load(const char *file)
       (*init_fct)();
       return (void*)img_id;
     }
-#endif /* __BEOS__ || __HAIKU__ */
+#endif /* __BEOS__ */
 
 #ifndef DLN_DEFINED
     dln_notimplement();

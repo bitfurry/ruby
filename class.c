@@ -426,7 +426,7 @@ rb_singleton_class_attached(VALUE klass, VALUE obj)
 	if (!RCLASS_IV_TBL(klass)) {
 	    RCLASS_IV_TBL(klass) = st_init_numtable();
 	}
-	rb_st_insert_id_and_value(klass, RCLASS_IV_TBL(klass), id_attached, obj);
+	rb_class_ivar_set(klass, id_attached, obj);
     }
 }
 
@@ -636,7 +636,8 @@ rb_define_class(const char *name, VALUE super)
     if (rb_const_defined(rb_cObject, id)) {
 	klass = rb_const_get(rb_cObject, id);
 	if (!RB_TYPE_P(klass, T_CLASS)) {
-	    rb_raise(rb_eTypeError, "%s is not a class", name);
+	    rb_raise(rb_eTypeError, "%s is not a class (%"PRIsVALUE")",
+		     name, rb_obj_class(klass));
 	}
 	if (rb_class_real(RCLASS_SUPER(klass)) != super) {
 	    rb_raise(rb_eTypeError, "superclass mismatch for class %s", name);
@@ -665,7 +666,7 @@ rb_define_class(const char *name, VALUE super)
  * \return the created class
  * \throw TypeError if the constant name \a name is already taken but
  *                  the constant is not a \c Class.
- * \throw NameError if the class is already defined but the class can not
+ * \throw TypeError if the class is already defined but the class can not
  *                  be reopened because its superclass is not \a super.
  * \post top-level constant named \a name refers the returned class.
  *
@@ -688,7 +689,7 @@ rb_define_class_under(VALUE outer, const char *name, VALUE super)
  * \return the created class
  * \throw TypeError if the constant name \a name is already taken but
  *                  the constant is not a \c Class.
- * \throw NameError if the class is already defined but the class can not
+ * \throw TypeError if the class is already defined but the class can not
  *                  be reopened because its superclass is not \a super.
  * \post top-level constant named \a name refers the returned class.
  *
@@ -703,11 +704,15 @@ rb_define_class_id_under(VALUE outer, ID id, VALUE super)
     if (rb_const_defined_at(outer, id)) {
 	klass = rb_const_get_at(outer, id);
 	if (!RB_TYPE_P(klass, T_CLASS)) {
-	    rb_raise(rb_eTypeError, "%"PRIsVALUE" is not a class", rb_id2str(id));
+	    rb_raise(rb_eTypeError, "%"PRIsVALUE"::%"PRIsVALUE" is not a class"
+		     " (%"PRIsVALUE")",
+		     outer, rb_id2str(id), rb_obj_class(klass));
 	}
 	if (rb_class_real(RCLASS_SUPER(klass)) != super) {
-	    rb_raise(rb_eTypeError, "superclass mismatch for class %"PRIsVALUE"",
-		     rb_id2str(id));
+	    rb_raise(rb_eTypeError, "superclass mismatch for class "
+		     "%"PRIsVALUE"::%"PRIsVALUE""
+		     " (%"PRIsVALUE" is given but was %"PRIsVALUE")",
+		     outer, rb_id2str(id), RCLASS_SUPER(klass), super);
 	}
 	return klass;
     }
@@ -752,9 +757,11 @@ rb_define_module(const char *name)
     id = rb_intern(name);
     if (rb_const_defined(rb_cObject, id)) {
 	module = rb_const_get(rb_cObject, id);
-	if (RB_TYPE_P(module, T_MODULE))
-	    return module;
-	rb_raise(rb_eTypeError, "%s is not a module", rb_obj_classname(module));
+	if (!RB_TYPE_P(module, T_MODULE)) {
+	    rb_raise(rb_eTypeError, "%s is not a module (%"PRIsVALUE")",
+		     name, rb_obj_class(module));
+	}
+	return module;
     }
     module = rb_define_module_id(id);
     rb_vm_add_root_module(id, module);
@@ -776,10 +783,12 @@ rb_define_module_id_under(VALUE outer, ID id)
 
     if (rb_const_defined_at(outer, id)) {
 	module = rb_const_get_at(outer, id);
-	if (RB_TYPE_P(module, T_MODULE))
-	    return module;
-	rb_raise(rb_eTypeError, "%s::%s is not a module",
-		 rb_class2name(outer), rb_obj_classname(module));
+	if (!RB_TYPE_P(module, T_MODULE)) {
+	    rb_raise(rb_eTypeError, "%"PRIsVALUE"::%"PRIsVALUE" is not a module"
+		     " (%"PRIsVALUE")",
+		     outer, rb_id2str(id), rb_obj_class(module));
+	}
+	return module;
     }
     module = rb_define_module_id(id);
     rb_const_set(outer, id, module);

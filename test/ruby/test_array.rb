@@ -1543,6 +1543,8 @@ class TestArray < Test::Unit::TestCase
       [[:first_one, :ok], :not_ok].to_h
     }
     assert_equal "wrong element type Symbol at 1 (expected array)", e.message
+    array = [eval("class C\u{1f5ff}; self; end").new]
+    assert_raise_with_message(TypeError, /C\u{1f5ff}/) {array.to_h}
     e = assert_raise(ArgumentError) {
       [[:first_one, :ok], [1, 2], [:not_ok]].to_h
     }
@@ -2647,6 +2649,12 @@ class TestArray < Test::Unit::TestCase
         assert_raise(IndexError, ARGV[1]) {a[0, 0] = Array.new(0x1000)}
       end;
     end
+  end
+
+  def test_dig
+    h = @cls[@cls[{a: 1}], 0]
+    assert_equal(1, h.dig(0, 0, :a))
+    assert_nil(h.dig(1, 0))
   end
 
   private

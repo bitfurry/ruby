@@ -121,6 +121,43 @@ class TestRubyLiteral < Test::Unit::TestCase
     assert_equal "foo\n", `echo #{s}`
   end
 
+  def test_frozen_string
+    all_assertions do |a|
+      a.for("false with indicator") do
+        str = eval("# -*- frozen-string-literal: false -*-\n""'foo'")
+        assert_not_predicate(str, :frozen?)
+      end
+      a.for("true with indicator") do
+        str = eval("# -*- frozen-string-literal: true -*-\n""'foo'")
+        assert_predicate(str, :frozen?)
+      end
+      a.for("false without indicator") do
+        str = eval("# frozen-string-literal: false\n""'foo'")
+        assert_not_predicate(str, :frozen?)
+      end
+      a.for("true without indicator") do
+        str = eval("# frozen-string-literal: true\n""'foo'")
+        assert_predicate(str, :frozen?)
+      end
+      a.for("false with preceding garbage") do
+        str = eval("# x frozen-string-literal: false\n""'foo'")
+        assert_not_predicate(str, :frozen?)
+      end
+      a.for("true with preceding garbage") do
+        str = eval("# x frozen-string-literal: true\n""'foo'")
+        assert_not_predicate(str, :frozen?)
+      end
+      a.for("false with succeeding garbage") do
+        str = eval("# frozen-string-literal: false x\n""'foo'")
+        assert_not_predicate(str, :frozen?)
+      end
+      a.for("true with succeeding garbage") do
+        str = eval("# frozen-string-literal: true x\n""'foo'")
+        assert_not_predicate(str, :frozen?)
+      end
+    end
+  end
+
   def test_regexp
     assert_instance_of Regexp, //
     assert_match(//, 'a')

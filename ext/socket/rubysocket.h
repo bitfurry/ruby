@@ -27,7 +27,7 @@
 #    undef HAVE_TYPE_STRUCT_SOCKADDR_DL
 #  endif
 #else
-#  if defined(__BEOS__) && !defined(__HAIKU__) && !defined(BONE)
+#  if defined(__BEOS__) && !defined(BONE)
 #    include <net/socket.h>
 #  else
 #    include <sys/socket.h>
@@ -80,6 +80,9 @@
 #endif
 
 #ifdef HAVE_IFADDRS_H
+#  ifdef __HAIKU__
+#    define _BSD_SOURCE
+#  endif
 #  include <ifaddrs.h>
 #endif
 #ifdef HAVE_SYS_IOCTL_H
@@ -295,7 +298,8 @@ int rb_getaddrinfo(const char *node, const char *service, const struct addrinfo 
 void rb_freeaddrinfo(struct rb_addrinfo *ai);
 VALUE rsock_freeaddrinfo(VALUE arg);
 int rb_getnameinfo(const struct sockaddr *sa, socklen_t salen, char *host, size_t hostlen, char *serv, size_t servlen, int flags);
-struct rb_addrinfo *rsock_addrinfo(VALUE host, VALUE port, int socktype, int flags);
+int rsock_fd_family(int fd);
+struct rb_addrinfo *rsock_addrinfo(VALUE host, VALUE port, int family, int socktype, int flags);
 struct rb_addrinfo *rsock_getaddrinfo(VALUE host, VALUE port, struct addrinfo *hints, int socktype_hack);
 VALUE rsock_fd_socket_addrinfo(int fd, struct sockaddr *addr, socklen_t len);
 VALUE rsock_io_socket_addrinfo(VALUE io, struct sockaddr *addr, socklen_t len);
@@ -343,28 +347,34 @@ enum sock_recv_type {
     RECV_SOCKET                 /* Socket#recvfrom */
 };
 
-VALUE rsock_s_recvfrom_nonblock(VALUE sock, int argc, VALUE *argv, enum sock_recv_type from);
+VALUE rsock_s_recvfrom_nonblock(VALUE sock, VALUE len, VALUE flg, VALUE str,
+			        VALUE ex, enum sock_recv_type from);
 VALUE rsock_s_recvfrom(VALUE sock, int argc, VALUE *argv, enum sock_recv_type from);
 
 int rsock_connect(int fd, const struct sockaddr *sockaddr, int len, int socks);
 
 VALUE rsock_s_accept(VALUE klass, int fd, struct sockaddr *sockaddr, socklen_t *len);
-VALUE rsock_s_accept_nonblock(int argc, VALUE *argv, VALUE klass, rb_io_t *fptr, struct sockaddr *sockaddr, socklen_t *len);
+VALUE rsock_s_accept_nonblock(VALUE klass, VALUE ex, rb_io_t *fptr,
+			      struct sockaddr *sockaddr, socklen_t *len);
 VALUE rsock_sock_listen(VALUE sock, VALUE log);
 
 VALUE rsock_sockopt_new(int family, int level, int optname, VALUE data);
 
 #if defined(HAVE_SENDMSG)
-VALUE rsock_bsock_sendmsg(int argc, VALUE *argv, VALUE sock);
-VALUE rsock_bsock_sendmsg_nonblock(int argc, VALUE *argv, VALUE sock);
+VALUE rsock_bsock_sendmsg(VALUE sock, VALUE data, VALUE flags,
+			  VALUE dest_sockaddr, VALUE controls);
+VALUE rsock_bsock_sendmsg_nonblock(VALUE sock, VALUE data, VALUE flags,
+			     VALUE dest_sockaddr, VALUE controls, VALUE ex);
 #else
 #define rsock_bsock_sendmsg rb_f_notimplement
 #define rsock_bsock_sendmsg_nonblock rb_f_notimplement
 #endif
 
 #if defined(HAVE_RECVMSG)
-VALUE rsock_bsock_recvmsg(int argc, VALUE *argv, VALUE sock);
-VALUE rsock_bsock_recvmsg_nonblock(int argc, VALUE *argv, VALUE sock);
+VALUE rsock_bsock_recvmsg(VALUE sock, VALUE dlen, VALUE clen, VALUE flags,
+			  VALUE scm_rights);
+VALUE rsock_bsock_recvmsg_nonblock(VALUE sock, VALUE dlen, VALUE clen,
+				   VALUE flags, VALUE scm_rights, VALUE ex);
 ssize_t rsock_recvmsg(int socket, struct msghdr *message, int flags);
 #else
 #define rsock_bsock_recvmsg rb_f_notimplement
@@ -428,13 +438,5 @@ static inline void rsock_maybe_wait_fd(int fd) { }
 #ifndef MSG_DONTWAIT_RELIABLE
 #  define MSG_DONTWAIT_RELIABLE 0
 #endif
-
-static inline int
-rsock_opt_false_p(VALUE opt, VALUE sym)
-{
-    if (!NIL_P(opt) && Qfalse == rb_hash_lookup2(opt, sym, Qundef))
-	return 1;
-    return 0;
-}
 
 #endif

@@ -11,6 +11,10 @@ AC_DEFUN([RUBY_PREREQ_AC],
 
 AC_DISABLE_OPTION_CHECKING
 
+AC_ARG_VAR([cflags], [additional CFLAGS])
+AC_ARG_VAR([cppflags], [additional CPPFLAGS])
+AC_ARG_VAR([cxxflags], [additional CXXFLAGS])
+
 AC_DEFUN([RUBY_RM_RECURSIVE], [
 m4_if(m4_version_compare(m4_defn([m4_PACKAGE_VERSION]), [2.70]), [-1], [
 # suppress error messages, rm: cannot remove 'conftest.dSYM', from
@@ -41,8 +45,8 @@ AC_ARG_WITH(baseruby,
 	[
 		BASERUBY="ruby"
 	])
-if test "`RUBYOPT=- $BASERUBY -e 'p 42' 2>/dev/null`" = 42; then
-    if test "`RUBYOPT=- $BASERUBY --disable=gems -e 'p 42' 2>/dev/null`" = 42; then
+if test "`RUBYOPT=- $BASERUBY -e 'print 42' 2>/dev/null`" = 42; then
+    if test "`RUBYOPT=- $BASERUBY --disable=gems -e 'print 42' 2>/dev/null`" = 42; then
 	BASERUBY="$BASERUBY --disable=gems"
     fi
     $BASERUBY -C "$srcdir/tool" downloader.rb -e gnu config.guess config.sub
@@ -839,6 +843,20 @@ if test "$GCC:${warnflags+set}:no" = yes::no; then
 fi
 RUBY_TRY_CFLAGS(-Qunused-arguments, [RUBY_APPEND_OPTIONS(rb_cv_wsuppress_flags, -Qunused-arguments)])
 
+for n in infinity nan; do
+    m=AS_TR_CPP($n)
+    AC_CACHE_CHECK([whether $m is available without C99 option], rb_cv_$n,
+	[AC_COMPILE_IFELSE(
+	    [AC_LANG_BOOL_COMPILE_TRY(AC_INCLUDES_DEFAULT([@%:@include <math.h>
+@%:@ifndef $m
+@%:@error no $m
+@%:@endif
+]), [1])], [eval rb_cv_$n=yes], [eval rb_cv_$n=no])])
+    if eval test '"$rb_cv_'$n'"' = yes; then
+	AC_DEFINE_UNQUOTED([HAVE_]$m)
+    fi
+done
+
 if test "$GCC" = yes; then
     # NaCl's glibc build generates undefined references to __memset_chk.
     # TODO(sbc): Remove this once NaCl's glibc is fixed.
@@ -853,7 +871,7 @@ if test "$GCC" = yes; then
 
     # -fstack-protector
     AS_CASE(["$target_os"],
-    [mingw*|nacl|haiku], [
+    [mingw*|nacl], [
 	stack_protector=no
     ])
     if test -z "${stack_protector+set}"; then
@@ -877,11 +895,6 @@ if test "$GCC" = yes; then
     ],
     [cygwin*|darwin*|netbsd*|nacl], [
       # need lgamma_r(), finite()
-    ],
-    [haiku], [
-      # Haiku R1/alpha3 uses gcc-4.4.4 which can not handle anonymous union
-      # with ANSI standard flags. Anonumous union is required to compile
-      # socket extension where <net/if.h> uses anonymous union.
     ],
     [
       # ANSI (no XCFLAGS because this is C only)
@@ -926,6 +939,10 @@ if test "$GCC" = yes; then
 
     AS_CASE(["$target_os"], [mingw*], [
 	RUBY_TRY_CFLAGS(-fno-omit-frame-pointer, [optflags="${optflags+$optflags }-fno-omit-frame-pointer"])
+	RUBY_TRY_CFLAGS(-static-libgcc, [static_libgcc=yes], [static_libgcc=no])
+	if test "$static_libgcc" = yes; then
+	    RUBY_APPEND_OPTION(EXTLDFLAGS, -static-libgcc)
+	fi
     ])
 
     # disable fast-math
@@ -1072,15 +1089,65 @@ main()
 		ac_cv_c_inline=no],
 [solaris*], [	LIBS="-lm $LIBS"
 		ac_cv_func_vfork=no
+		AC_MSG_CHECKING(whether _XOPEN_SOURCE is already given)
+		AC_TRY_COMPILE([#include <unistd.h>
+		    #ifndef _XOPEN_SOURCE
+		    #error _XOPEN_SOURCE is not defined
+		    #endif
+		    ], [],
+		    [given_xopen_source=yes], [given_xopen_source=no])
+		AC_MSG_RESULT($given_xopen_source)
+		if test $given_xopen_source = no; then
+		  # On Solaris, with gcc, -std=iso9899:1999 in $ansi_options
+		  # is often also needed in CPPFLAGS, because some feature
+		  # definitions vary depending on such standards options.
+		  AS_CASE(["${ansi_options}"],
+		  [*-std=iso9899:1999*], [
+		    RUBY_APPEND_OPTIONS(CPPFLAGS, ${ansi_options})
+		  ])
+		  AC_MSG_CHECKING(appropriate _XOPEN_SOURCE value to define)
+		  define_xopen_source=""
+		  for tmp_xpg in 7 6 5; do
+		    if test x"$define_xopen_source" != x; then
+		        break
+		    fi
+		    # Both AC_TRY_CPP and AC_TRY_COMPILE should pass
+		    # because some options may not be set to CPPFLAGS.
+		    AC_TRY_CPP([
+			#define _XOPEN_SOURCE ${tmp_xpg}00
+			#include <unistd.h>
+			#ifndef _XPG${tmp_xpg}
+			#error _XPG${tmp_xpg} should be defined by _XOPEN_SOURCE=${tmp_xpg}00
+			#endif
+			], [
+			AC_TRY_COMPILE([
+			#define _XOPEN_SOURCE ${tmp_xpg}00
+			#include <unistd.h>
+			#ifndef _XPG${tmp_xpg}
+			#error _XPG${tmp_xpg} should be defined by _XOPEN_SOURCE=${tmp_xpg}00
+			#endif
+			], [],
+			[define_xopen_source=${tmp_xpg}00], [])
+			], [])
+		  done
+		  if test x"$define_xopen_source" = x; then
+		    define_xopen_source=no
+		  fi
+		  AC_MSG_RESULT($define_xopen_source)
+		  if test x"$define_xopen_source" != xno; then
+		    RUBY_APPEND_OPTIONS(CPPFLAGS, -D_XOPEN_SOURCE=$define_xopen_source)
+		  fi
+		fi
 		],
-[beos*|haiku*], [
+[beos*], [
 		ac_cv_func_link=no
 		ac_cv_func_sched_yield=no
 		ac_cv_func_pthread_attr_setinheritsched=no
-		AS_CASE(["$target_os"],
-		[beos*], [ ac_cv_header_net_socket_h=yes],
-		[haiku*], [ ac_cv_func_shutdown=no])
-		LIBS="$LIBS" # m lib is include in root under BeOS/Haiku
+		ac_cv_header_net_socket_h=yes
+		LIBS="$LIBS" # m lib is include in root under BeOS
+		],
+[haiku*], [
+		LIBS="$LIBS"
 		],
 [cygwin*], [	ac_cv_header_langinfo_h=yes
 		AC_CHECK_FUNCS(cygwin_conv_path)
@@ -1135,8 +1202,6 @@ main()
 		AC_CHECK_FUNCS(_wfreopen_s)
 		AC_LIBOBJ([langinfo])
 		],
-[os2-emx*], [	LIBS="-lm $LIBS"
-		ac_cv_lib_dir_opendir=no],
 [bsdi*], [	LIBS="-lm $LIBS"
 		AC_DEFINE(BROKEN_SETREUID, 1)
 		AC_DEFINE(BROKEN_SETREGID, 1)
@@ -2182,6 +2247,8 @@ AC_CHECK_FUNCS(memalign)
 AC_CHECK_FUNCS(writev)
 AC_CHECK_FUNCS(memrchr)
 AC_CHECK_FUNCS(memmem)
+AC_CHECK_FUNCS(mkfifo)
+AC_CHECK_FUNCS(mknod)
 AC_CHECK_FUNCS(mktime)
 AC_CHECK_FUNCS(pipe2)
 AC_CHECK_FUNCS(poll)
@@ -2646,6 +2713,14 @@ if test "$ac_cv_func_setpgid:$ac_cv_func_setpgrp" = no:yes; then
 AC_FUNC_SETPGRP
 fi
 
+if test x"$ac_cv_func_dirfd" = xno; then
+  AS_CASE(["$target_os"],[solaris*],
+          [AC_CHECK_MEMBERS([DIR.d_fd, DIR.dd_fd],,,[
+#include <sys/types.h>
+#include <dirent.h>
+])])
+fi
+
 if test x"$target_cpu" = xia64; then
     AC_LIBOBJ([ia64])
     AC_CACHE_CHECK(for __libc_ia64_register_backing_store_base,
@@ -2787,11 +2862,12 @@ if test x"$enable_pthread" = xyes; then
 	AC_DEFINE(NON_SCALAR_THREAD_ID)
     fi
     AC_CHECK_FUNCS(sched_yield pthread_attr_setinheritsched \
-	pthread_getattr_np pthread_attr_get_np pthread_attr_getstack\
+	pthread_attr_get_np pthread_attr_getstack\
 	pthread_get_stackaddr_np pthread_get_stacksize_np \
 	thr_stksegment pthread_stackseg_np pthread_getthrds_np \
 	pthread_cond_init pthread_condattr_setclock pthread_condattr_init \
 	pthread_sigmask pthread_setname_np pthread_set_name_np)
+    AS_CASE(["$target_os"],[aix*],[ac_cv_func_pthread_getattr_np=no],[AC_CHECK_FUNCS(pthread_getattr_np)])
     if test "${host_os}" = "nacl"; then
       ac_cv_func_pthread_attr_init=no
     else
@@ -2828,10 +2904,24 @@ if test x"$enable_pthread" = xyes; then
 	    AC_DEFINE_UNQUOTED(SET_THREAD_NAME(name), pthread_set_name_np(pthread_self(), name))
     fi
 fi
-if test x"$ac_cv_header_ucontext_h" = xyes; then
+
+if test x"$ac_cv_header_ucontext_h" = xno; then
+    AC_CACHE_CHECK([if signal.h defines ucontext_t], [rb_cv_ucontext_in_signal_h],
+	[AC_TRY_COMPILE([@%:@include <signal.h>],
+	[size_t size = sizeof(ucontext_t);],
+	[rb_cv_ucontext_in_signal_h=yes], [rb_cv_ucontext_in_signal_h=no])])
+    if test x"$rb_cv_ucontext_in_signal_h" = xyes; then
+	    AC_DEFINE_UNQUOTED(UCONTEXT_IN_SIGNAL_H, 1)
+    fi
+fi
+if test x"$ac_cv_header_ucontext_h" = xyes -o x"$rb_cv_ucontext_in_signal_h" = xyes; then
     AC_CACHE_CHECK([if mcontext_t is a pointer], [rb_cv_mcontext_t_ptr],
-	[AC_TRY_COMPILE([@%:@include <ucontext.h>
-	mcontext_t test(mcontext_t mc) {return mc+1;}
+	[AC_TRY_COMPILE([
+	    @%:@include <signal.h>
+	    @%:@ifdef HAVE_UCONTEXT_H
+	    @%:@include <ucontext.h>
+	    @%:@endif
+        mcontext_t test(mcontext_t mc) {return mc+1;}
 	],
 	[test(0);],
 	[rb_cv_mcontext_t_ptr=yes], [rb_cv_mcontext_t_ptr=no])])
@@ -2982,7 +3072,7 @@ if test "$with_dln_a_out" != yes; then
       # mkmf.rb's have_header() to fail if the desired resource happens to be
       # installed in the /usr/local tree.
       RUBY_APPEND_OPTION(CCDLFLAGS, -fno-common)],
-    [bsdi*|beos*|haiku*|cygwin*|mingw*|aix*|interix*], [ ],
+    [bsdi*|beos*|cygwin*|mingw*|aix*|interix*], [ ],
     [
       RUBY_APPEND_OPTION(CCDLFLAGS, -fPIC)])
   else
@@ -3040,7 +3130,7 @@ if test "$with_dln_a_out" != yes; then
 	[bsdi3*], [	AS_CASE(["$CC"],
 			[*shlicc*], [	: ${LDSHARED='$(CC) -r'}
 					rb_cv_dlopen=yes])],
-	[linux* | gnu* | k*bsd*-gnu | netbsd* | bsdi* | kopensolaris*-gnu], [
+	[linux* | gnu* | k*bsd*-gnu | netbsd* | bsdi* | kopensolaris*-gnu | haiku*], [
 			: ${LDSHARED='$(CC) -shared'}
 			if test "$rb_cv_binary_elf" = yes; then
 			    LDFLAGS="$LDFLAGS -Wl,-export-dynamic"
@@ -3094,17 +3184,6 @@ if test "$with_dln_a_out" != yes; then
 			    ])
 			: ${LIBPATHENV=LIBRARY_PATH}
 			rb_cv_dlopen=yes],
-	[haiku*], [	AS_CASE(["$target_cpu"],
-			  [powerpc*], [
-			    : ${LDSHARED='$(LD) -xms'}
-			    EXTDLDFLAGS='-export $(TARGET_ENTRY)'
-			    DLDFLAGS="$DLDFLAGS -lroot glue-noinit.a init_term_dyn.o start_dyn.o"
-                            ],
-			  [i586*], [
-			    : ${LDSHARED='$(CC) -shared'}
-			    ])
-			: ${LIBPATHENV=LIBRARY_PATH}
-			rb_cv_dlopen=yes ],
 	[nto-qnx*], [	DLDFLAGS="$DLDFLAGS -L/lib -L/usr/lib -L/usr/local/lib"
 			: ${LDSHARED='$(LD) -Bshareable -x'}
 			LDFLAGS="$LDFLAGS -L/lib -L/usr/lib -L/usr/local/lib"
@@ -3114,12 +3193,11 @@ if test "$with_dln_a_out" != yes; then
 			XLDFLAGS="$XLDFLAGS -Wl,--stack,0x00200000,--enable-auto-import"
 			DLDFLAGS="${DLDFLAGS} -Wl,--enable-auto-image-base,--enable-auto-import"
 			: ${LIBPATHENV=""}
+			: ${PRELOADENV=""}
 			rb_cv_dlopen=yes],
 	[hiuxmpp], [	: ${LDSHARED='$(LD) -r'}],
 	[atheos*], [	: ${LDSHARED='$(CC) -shared'}
 			rb_cv_dlopen=yes],
-	[os2-emx*], [	LDFLAGS="$LDFLAGS -Zomf"
-			],
         [nacl], [ LDSHARED='$(CC) -shared' ],
 	[	: ${LDSHARED='$(LD)'}])
   AC_MSG_RESULT($rb_cv_dlopen)
@@ -3208,6 +3286,7 @@ AS_CASE(["$target_cpu-$target_os"],
     AC_CHECK_HEADERS([execinfo.h])
     if test "x$ac_cv_header_execinfo_h" = xyes; then
 	AC_CHECK_LIB([execinfo], [backtrace])
+	AC_CHECK_HEADERS([libunwind.h])
     fi],
 [*-freebsd*|x86_64-netbsd*], [
     AC_CHECK_HEADERS([execinfo.h])
@@ -3315,9 +3394,6 @@ else
     [darwin*], [
 	RUBY_APPEND_OPTION(XLDFLAGS, [-Wl,-u,_objc_msgSend])
 	DLEXT=bundle],
-    [os2-emx*], [
-	LOAD_RELATIVE=1
-	DLEXT=dll],
     [cygwin*|mingw*|*djgpp*], [
 	LOAD_RELATIVE=1
 	DLEXT=so],
@@ -3489,7 +3565,7 @@ LIBRUBYARG='$(LIBRUBYARG_STATIC)'
 SOLIBS=
 
 AS_CASE(["$target_os"],
-  [cygwin*|mingw*|beos*|haiku*|darwin*|os2-emx*], [
+  [cygwin*|mingw*|beos*|haiku*|darwin*], [
     : ${DLDLIBS=""}
     ],
   [
@@ -3557,7 +3633,7 @@ AS_CASE("$enable_shared", [yes], [
     [sunos4*], [
 	LIBRUBY_ALIASES='lib$(RUBY_SO_NAME).so.$(MAJOR).$(MINOR) lib$(RUBY_SO_NAME).so'
 	],
-    [linux* | gnu* | k*bsd*-gnu | atheos* | kopensolaris*-gnu], [
+    [linux* | gnu* | k*bsd*-gnu | atheos* | kopensolaris*-gnu | haiku*], [
 	LIBRUBY_DLDFLAGS='-Wl,-soname,lib$(RUBY_SO_NAME).so.$(MAJOR).$(MINOR)'" $LDFLAGS_OPTDIR"
 	LIBRUBY_ALIASES='lib$(RUBY_SO_NAME).so.$(MAJOR).$(MINOR) lib$(RUBY_SO_NAME).so'
 	if test "$load_relative" = yes; then
@@ -3649,10 +3725,6 @@ AS_CASE("$enable_shared", [yes], [
           AS_HELP_STRING([--disable-pie], [disable PIE feature]),
           [pie=$enableval], [pie=])
   AS_CASE(["$target_os"],
-  [haiku], [
-    # gcc supports PIE, but doesn't work correctly in Haiku
-    pie=no
-  ],
   [nacl], [
     # -pie implies -shared for NaCl.
     pie=no
@@ -3701,6 +3773,15 @@ if test "$EXEEXT" = .exe; then
     EXECUTABLE_EXTS=`echo $EXECUTABLE_EXTS | tr -d '"' | tr , ' '`
     AC_SUBST(EXECUTABLE_EXTS)
 fi
+
+AS_CASE("$cross_compiling:${LIBPATHENV}", [yes:* | no:], [], [
+    AC_MSG_CHECKING(whether wrapper for $LIBPATHENV is needed)
+    AS_IF([env ${LIBPATHENV}=/lib /bin/sh -c ': ${'${LIBPATHENV}'?}' 2>/dev/null],
+	[AC_MSG_RESULT(no)],
+	[PREP="$PREP"' ruby-runner$(EXEEXT)'
+	AC_MSG_RESULT(yes)]
+    )
+])
 
 AC_ARG_ENABLE(dtrace,
         AS_HELP_STRING([--enable-dtrace],
@@ -3820,13 +3901,6 @@ AS_CASE(["$target_os"],
 	RUBY_APPEND_OPTION(CFLAGS, -pipe)
 	RUBY_APPEND_OPTION(XLDFLAGS, [-framework CoreFoundation])
 	RUBY_APPEND_OPTION(LIBRUBYARG_STATIC, [-framework CoreFoundation])
-	],
-    [os2-emx], [
-	AC_LIBOBJ([os2])
-	CFLAGS="$CFLAGS -DOS2"
-	LIBRUBY_A=`echo $LIBRUBY_A | sed 's/^lib//'`
-	LIBRUBY_SO=`echo $LIBRUBY_SO | sed 's/^lib//'`
-	LIBRUBY_ALIASES=`for i in $LIBRUBY_ALIASES; do echo "$i"; done | sed 's/^lib//'`
 	],
     [osf*], [
 	if test "$GCC" != "yes" ; then
@@ -4304,7 +4378,7 @@ AC_SUBST(BUILTIN_TRANSOBJS)
 
 PACKAGE=$RUBY_BASE_NAME
 AC_SUBST(PACKAGE)
-AC_MSG_RESULT($PACKAGE library version = $ruby_version)
+AS_MESSAGE([$PACKAGE library version = $ruby_version])
 
 AS_CASE([" $CPP "], [*" $CC "*], [CPP=`echo " $CPP " | sed "s| $CC |"' $(CC) |;s/^ *//;s/  *$//'`])
 
@@ -4356,7 +4430,7 @@ AC_CONFIG_FILES(Makefile, [
 [EXEEXT='$EXEEXT' gnumake='$gnumake'])
 
 AC_ARG_WITH([ruby-pc],
-	    AC_HELP_STRING([pc file basename]),
+	    AC_HELP_STRING([--with-ruby-pc=FILENAME], [pc file basename]),
 	    [ruby_pc="$withval"],
 	    [ruby_pc="${RUBY_BASE_NAME}-${MAJOR}.${MINOR}.pc"])
 AC_SUBST(ruby_pc)

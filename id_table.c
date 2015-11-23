@@ -187,6 +187,27 @@
 #error
 #endif
 
+/* IMPL(create) will be "hash_id_table_create" and so on */
+#define IMPL1(name, op) TOKEN_PASTE(name, _id##op) /* expand `name' */
+#define IMPL(op)        IMPL1(ID_TABLE_NAME, _table##op) /* but prevent `op' */
+
+#ifdef __GNUC__
+# define UNUSED(func) static func __attribute__((unused))
+#else
+# define UNUSED(func) static func
+#endif
+
+UNUSED(ID_TABLE_IMPL_TYPE *IMPL(_create)(size_t));
+UNUSED(void IMPL(_free)(ID_TABLE_IMPL_TYPE *));
+UNUSED(void IMPL(_clear)(ID_TABLE_IMPL_TYPE *));
+UNUSED(size_t IMPL(_size)(const ID_TABLE_IMPL_TYPE *));
+UNUSED(size_t IMPL(_memsize)(const ID_TABLE_IMPL_TYPE *));
+UNUSED(int IMPL(_insert)(ID_TABLE_IMPL_TYPE *, ID, VALUE));
+UNUSED(int IMPL(_lookup)(ID_TABLE_IMPL_TYPE *, ID, VALUE *));
+UNUSED(int IMPL(_delete)(ID_TABLE_IMPL_TYPE *, ID));
+UNUSED(void IMPL(_foreach)(ID_TABLE_IMPL_TYPE *, rb_id_table_foreach_func_t *, void *));
+UNUSED(void IMPL(_foreach_values)(ID_TABLE_IMPL_TYPE *, rb_id_table_foreach_values_func_t *, void *));
+
 #if ID_TABLE_USE_ID_SERIAL
 typedef rb_id_serial_t id_key_t;
 static inline ID
@@ -222,7 +243,8 @@ struct st_id_table {
 };
 
 static struct st_table *
-tbl2st(struct st_id_table *tbl) {
+tbl2st(struct st_id_table *tbl)
+{
     if (tbl->check != ID_TABLE_MARK) rb_bug("tbl2st: check error %x", tbl->check);
     return tbl->st;
 }
@@ -250,7 +272,8 @@ struct st_id_table {
 };
 
 static struct st_table *
-tbl2st(struct st_id_table *tbl) {
+tbl2st(struct st_id_table *tbl)
+{
     return (struct st_table *)tbl;
 }
 
@@ -275,13 +298,13 @@ st_id_table_clear(struct st_id_table *tbl)
 }
 
 static size_t
-st_id_table_size(struct st_id_table *tbl)
+st_id_table_size(const struct st_id_table *tbl)
 {
     return tbl2st(tbl)->num_entries;
 }
 
 static size_t
-st_id_table_memsize(struct st_id_table *tbl)
+st_id_table_memsize(const struct st_id_table *tbl)
 {
     size_t header_size = ID_TABLE_USE_ST_DEBUG ? sizeof(struct st_id_table) : 0;
     return header_size + st_memsize(tbl2st(tbl));
@@ -393,13 +416,13 @@ list_id_table_clear(struct list_id_table *tbl)
 }
 
 static size_t
-list_id_table_size(struct list_id_table *tbl)
+list_id_table_size(const struct list_id_table *tbl)
 {
     return (size_t)tbl->num;
 }
 
 static size_t
-list_id_table_memsize(struct list_id_table *tbl)
+list_id_table_memsize(const struct list_id_table *tbl)
 {
     return (sizeof(id_key_t) + sizeof(VALUE)) * tbl->capa + sizeof(struct list_id_table);
 }
@@ -696,7 +719,7 @@ list_id_table_delete(struct list_id_table *tbl, ID id)
 	list_delete_index(tbl, key, i); \
 	values = TABLE_VALUES(tbl);     \
 	num = tbl->num;                 \
-	i--; /* redo smae index */      \
+	i--; /* redo same index */      \
 	break; \
     } \
 } while (0)
@@ -798,7 +821,7 @@ hash_id_table_free(sa_table *table)
 }
 
 static size_t
-hash_id_table_memsize(sa_table *table)
+hash_id_table_memsize(const sa_table *table)
 {
     return sizeof(sa_table) + table->num_bins * sizeof (sa_entry);
 }
@@ -842,8 +865,8 @@ find_empty(register sa_table* table, register sa_index_t pos)
 }
 
 static void resize(register sa_table* table);
-static int insert_into_chain(register sa_table*, register sa_index_t, st_data_t, sa_index_t pos);
-static int insert_into_main(register sa_table*, sa_index_t, st_data_t, sa_index_t pos, sa_index_t prev_pos);
+static int insert_into_chain(register sa_table*, register id_key_t, st_data_t, sa_index_t pos);
+static int insert_into_main(register sa_table*, id_key_t, st_data_t, sa_index_t pos, sa_index_t prev_pos);
 
 static int
 sa_insert(register sa_table* table, id_key_t key, VALUE value)
@@ -1014,7 +1037,7 @@ hash_id_table_lookup(register sa_table *table, ID id, VALUE *valuep)
 }
 
 static size_t
-hash_id_table_size(sa_table *table)
+hash_id_table_size(const sa_table *table)
 {
     return table->num_entries;
 }
@@ -1157,7 +1180,8 @@ ITEM_SET_KEY(struct hash_id_table *tbl, int i, id_key_t key)
 #endif
 
 static inline int
-round_capa(int capa) {
+round_capa(int capa)
+{
     /* minsize is 4 */
     capa >>= 2;
     capa |= capa >> 1;
@@ -1205,13 +1229,13 @@ hash_id_table_clear(struct hash_id_table *tbl)
 }
 
 static size_t
-hash_id_table_size(struct hash_id_table *tbl)
+hash_id_table_size(const struct hash_id_table *tbl)
 {
     return (size_t)tbl->num;
 }
 
 static size_t
-hash_id_table_memsize(struct hash_id_table *tbl)
+hash_id_table_memsize(const struct hash_id_table *tbl)
 {
     return sizeof(item_t) * tbl->capa + sizeof(struct hash_id_table);
 }
@@ -1403,7 +1427,8 @@ struct mix_id_table {
     } aux;
 };
 
-#define LIST_P(mix) ((mix)->aux.size.capa <= ID_TABLE_USE_MIX_LIST_MAX_CAPA)
+#define LIST_LIMIT_P(mix) ((mix)->aux.size.num == ID_TABLE_USE_MIX_LIST_MAX_CAPA)
+#define LIST_P(mix)       ((mix)->aux.size.capa <= ID_TABLE_USE_MIX_LIST_MAX_CAPA)
 
 static struct mix_id_table *
 mix_id_table_create(size_t size)
@@ -1428,14 +1453,14 @@ mix_id_table_clear(struct mix_id_table *tbl)
 }
 
 static size_t
-mix_id_table_size(struct mix_id_table *tbl)
+mix_id_table_size(const struct mix_id_table *tbl)
 {
     if (LIST_P(tbl)) return list_id_table_size(&tbl->aux.list);
     else             return hash_id_table_size(&tbl->aux.hash);
 }
 
 static size_t
-mix_id_table_memsize(struct mix_id_table *tbl)
+mix_id_table_memsize(const struct mix_id_table *tbl)
 {
     if (LIST_P(tbl)) return list_id_table_memsize(&tbl->aux.list) - sizeof(struct list_id_table) + sizeof(struct mix_id_table);
     else             return hash_id_table_memsize(&tbl->aux.hash);
@@ -1444,36 +1469,45 @@ mix_id_table_memsize(struct mix_id_table *tbl)
 static int
 mix_id_table_insert(struct mix_id_table *tbl, ID id, VALUE val)
 {
-    if (LIST_P(tbl)) {
-	int r = list_id_table_insert(&tbl->aux.list, id, val);
+    int r;
 
-	if (!LIST_P(tbl)) {
+    if (LIST_P(tbl)) {
+	if (!LIST_LIMIT_P(tbl)) {
+	    r = list_id_table_insert(&tbl->aux.list, id, val);
+	}
+	else {
+	    /* convert to hash */
 	    /* overflow. TODO: this promotion should be done in list_extend_table */
 	    struct list_id_table *list = &tbl->aux.list;
-	    struct hash_id_table *hash = &tbl->aux.hash;
+	    struct hash_id_table hash_body;
 	    id_key_t *keys = list->keys;
 	    VALUE *values = TABLE_VALUES(list);
 	    const int num = list->num;
 	    int i;
 
-	    hash_id_table_init(hash, 0);
+	    hash_id_table_init(&hash_body, 0);
 
 	    for (i=0; i<num; i++) {
-		hash_id_table_insert_key(hash, keys[i], values[i]);
+		/* note that GC can run */
+		hash_id_table_insert_key(&hash_body, keys[i], values[i]);
 	    }
+
+	    tbl->aux.hash = hash_body;
 
 	    /* free list keys/values */
 	    xfree(keys);
 #if ID_TABLE_USE_CALC_VALUES == 0
 	    xfree(values);
 #endif
-	    assert(LIST_P(tbl) == 0);
+	    goto hash_insert;
 	}
-	return r;
     }
     else {
-	return hash_id_table_insert(&tbl->aux.hash, id, val);
+      hash_insert:
+	r = hash_id_table_insert(&tbl->aux.hash, id, val);
+	assert(!LIST_P(tbl));
     }
+    return r;
 }
 
 static int
@@ -1506,10 +1540,6 @@ mix_id_table_foreach_values(struct mix_id_table *tbl, rb_id_table_foreach_values
 
 #endif /* ID_TABLE_USE_MIX */
 
-/* IMPL(create) will be "hash_id_table_create" and so on */
-#define IMPL1(name, op) TOKEN_PASTE(name, _id##op) /* expand `name' */
-#define IMPL(op)        IMPL1(ID_TABLE_NAME, _table##op) /* but prevent `op' */
-
 #define IMPL_TYPE1(type, prot, name, args) \
     RUBY_ALIAS_FUNCTION_TYPE(type, prot, name, args)
 #define IMPL_TYPE(type, name, prot, args) \
@@ -1523,8 +1553,8 @@ mix_id_table_foreach_values(struct mix_id_table *tbl, rb_id_table_foreach_values
 IMPL_TYPE(struct rb_id_table *, create, (size_t size), (size))
 IMPL_VOID(free, (struct rb_id_table *tbl), (id_tbl))
 IMPL_VOID(clear, (struct rb_id_table *tbl), (id_tbl))
-IMPL_TYPE(size_t, size, (struct rb_id_table *tbl), (id_tbl))
-IMPL_TYPE(size_t, memsize, (struct rb_id_table *tbl), (id_tbl))
+IMPL_TYPE(size_t, size, (const struct rb_id_table *tbl), (id_tbl))
+IMPL_TYPE(size_t, memsize, (const struct rb_id_table *tbl), (id_tbl))
 
 IMPL_TYPE(int , insert, (struct rb_id_table *tbl, ID id, VALUE val),
 	  (id_tbl, id, val))

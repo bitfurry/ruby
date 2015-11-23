@@ -12,6 +12,7 @@
 **********************************************************************/
 
 #include "internal.h"
+#include "encindex.h"
 
 #include <sys/types.h>
 #include <sys/stat.h>
@@ -618,6 +619,19 @@ dir_inspect(VALUE dir)
     return rb_funcallv(dir, rb_intern("to_s"), 0, 0);
 }
 
+/* Workaround for Solaris 10 that does not have dirfd.
+   Note: Solaris 11 (POSIX.1-2008 compliant) has dirfd(3C).
+ */
+#if defined(__sun) && !defined(HAVE_DIRFD)
+# if defined(HAVE_DIR_D_FD)
+#  define dirfd(x) ((x)->d_fd)
+#  define HAVE_DIRFD 1
+# elif defined(HAVE_DIR_DD_FD)
+#  define dirfd(x) ((x)->dd_fd)
+#  define HAVE_DIRFD 1
+# endif
+#endif
+
 #ifdef HAVE_DIRFD
 /*
  *  call-seq:
@@ -670,6 +684,18 @@ dir_path(VALUE dir)
 }
 
 #if defined _WIN32
+static int
+fundamental_encoding_p(rb_encoding *enc)
+{
+    switch (rb_enc_to_index(enc)) {
+      case ENCINDEX_ASCII:
+      case ENCINDEX_US_ASCII:
+      case ENCINDEX_UTF_8:
+	return TRUE;
+      default:
+	return FALSE;
+    }
+}
 # define READDIR(dir, enc) rb_w32_readdir((dir), (enc))
 #else
 # define READDIR(dir, enc) readdir((dir))
@@ -997,10 +1023,17 @@ rb_dir_getwd(void)
 {
     char *path;
     VALUE cwd;
+    int fsenc = rb_enc_to_index(rb_filesystem_encoding());
 
+    if (fsenc == ENCINDEX_US_ASCII) fsenc = ENCINDEX_ASCII;
     path = my_getcwd();
+#ifdef __APPLE__
+    cwd = rb_str_normalize_ospath(path, strlen(path));
+    OBJ_TAINT(cwd);
+#else
     cwd = rb_tainted_str_new2(path);
-    rb_enc_associate(cwd, rb_filesystem_encoding());
+#endif
+    rb_enc_associate_index(cwd, fsenc);
 
     xfree(path);
     return cwd;
@@ -1212,9 +1245,7 @@ do_opendir(const char *path, int flags, rb_encoding *enc)
     DIR *dirp;
 #ifdef _WIN32
     VALUE tmp = 0;
-    if (enc != rb_usascii_encoding() &&
-	enc != rb_ascii8bit_encoding() &&
-	enc != rb_utf8_encoding()) {
+    if (!fundamental_encoding_p(enc)) {
 	tmp = rb_enc_str_new(path, strlen(path), enc);
 	tmp = rb_str_encode_ospath(tmp);
 	path = RSTRING_PTR(tmp);
@@ -1525,10 +1556,7 @@ replace_real_basename(char *path, long base, rb_encoding *enc, int norm_p, int f
     HANDLE h = INVALID_HANDLE_VALUE;
     long wlen;
     int e = 0;
-    if (enc &&
-	enc != rb_usascii_encoding() &&
-	enc != rb_ascii8bit_encoding() &&
-	enc != rb_utf8_encoding()) {
+    if (!fundamental_encoding_p(enc)) {
 	tmp = rb_enc_str_new_cstr(plainname, enc);
 	tmp = rb_str_encode_ospath(tmp);
 	plainname = RSTRING_PTR(tmp);
@@ -1637,6 +1665,7 @@ dirent_match(const char *pat, rb_encoding *enc, const char *name, const struct d
 static int
 glob_helper(
     const char *path,
+    long pathlen,
     int dirsep, /* '/' should be placed before appending child entry's name to 'path'. */
     rb_pathtype_t pathtype, /* type of 'path' */
     struct glob_pattern **beg,
@@ -1651,7 +1680,6 @@ glob_helper(
     struct glob_pattern **cur, **new_beg, **new_end;
     int plain = 0, magical = 0, recursive = 0, match_all = 0, match_dir = 0;
     int escape = !(flags & FNM_NOESCAPE);
-    long pathlen;
 
     for (cur = beg; cur < end; ++cur) {
 	struct glob_pattern *p = *cur;
@@ -1684,7 +1712,6 @@ glob_helper(
 	}
     }
 
-    pathlen = strlen(path);
     if (*path) {
 	if (match_all && pathtype == path_unknown) {
 	    if (do_lstat(path, &st, flags, enc) == 0) {
@@ -1793,15 +1820,18 @@ glob_helper(
 	    }
 	    name = buf + pathlen + (dirsep != 0);
 	    if (recursive && dotfile < ((flags & FNM_DOTMATCH) ? 2 : 1)) {
+#ifdef DT_UNKNOWN
+		if ((new_pathtype = dp->d_type) != (rb_pathtype_t)DT_UNKNOWN)
+		    /* Got it. We need nothing more. */
+		    ;
+		else
+		    /* fall back to call lstat(2) */
+#endif
 		/* RECURSIVE never match dot files unless FNM_DOTMATCH is set */
-#ifndef DT_DIR
 		if (do_lstat(buf, &st, flags, enc) == 0)
 		    new_pathtype = IFTODT(st.st_mode);
 		else
 		    new_pathtype = path_noent;
-#else
-		new_pathtype = dp->d_type;
-#endif
 	    }
 
 	    new_beg = new_end = GLOB_ALLOC_N(struct glob_pattern *, (end - beg) * 2);
@@ -1836,7 +1866,8 @@ glob_helper(
 		}
 	    }
 
-	    status = glob_helper(buf, 1, new_pathtype, new_beg, new_end,
+	    status = glob_helper(buf, name - buf + namlen, 1,
+				 new_pathtype, new_beg, new_end,
 				 flags, func, arg, enc);
 	    GLOB_FREE(buf);
 	    GLOB_FREE(new_beg);
@@ -1899,8 +1930,9 @@ glob_helper(
 						flags, &new_pathtype);
 		}
 #endif
-		status = glob_helper(buf, 1, new_pathtype, new_beg,
-				     new_end, flags, func, arg, enc);
+		status = glob_helper(buf, pathlen + strlen(buf + pathlen), 1,
+				     new_pathtype, new_beg, new_end,
+				     flags, func, arg, enc);
 		GLOB_FREE(buf);
 		GLOB_FREE(new_beg);
 		if (status) break;
@@ -1941,7 +1973,8 @@ ruby_glob0(const char *path, int flags, ruby_glob_func *func, VALUE arg, rb_enco
 	GLOB_FREE(buf);
 	return -1;
     }
-    status = glob_helper(buf, 0, path_unknown, &list, &list + 1, flags, func, arg, enc);
+    status = glob_helper(buf, n, 0, path_unknown, &list, &list + 1,
+			 flags, func, arg, enc);
     glob_free_pattern(list);
     GLOB_FREE(buf);
 
@@ -2021,7 +2054,7 @@ ruby_brace_expand(const char *str, int flags, ruby_glob_func *func, VALUE arg,
 	if (*p == '{' && nest++ == 0) {
 	    lbrace = p;
 	}
-	if (*p == '}' && --nest <= 0) {
+	if (*p == '}' && lbrace && --nest == 0) {
 	    rbrace = p;
 	    break;
 	}
@@ -2119,8 +2152,10 @@ push_glob(VALUE ary, VALUE str, int flags)
 #ifdef __APPLE__
     str = rb_str_encode_ospath(str);
 #endif
-    if (enc == rb_usascii_encoding()) enc = rb_filesystem_encoding();
-    if (enc == rb_usascii_encoding()) enc = rb_ascii8bit_encoding();
+    if (rb_enc_to_index(enc) == ENCINDEX_US_ASCII)
+	enc = rb_filesystem_encoding();
+    if (rb_enc_to_index(enc) == ENCINDEX_US_ASCII)
+	enc = rb_ascii8bit_encoding();
     flags |= GLOB_VERBOSE;
     args.glob.func = push_pattern;
     args.glob.value = ary;

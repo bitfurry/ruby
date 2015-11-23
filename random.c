@@ -455,6 +455,11 @@ random_init(int argc, VALUE *argv, VALUE obj)
 static int
 fill_random_bytes_urandom(void *seed, size_t size)
 {
+    /*
+      O_NONBLOCK and O_NOCTTY is meaningless if /dev/urandom correctly points
+      to a urandom device. But it protects from several strange hazard if
+      /dev/urandom is not a urandom device.
+    */
     int fd = rb_cloexec_open("/dev/urandom",
 # ifdef O_NONBLOCK
 			     O_NONBLOCK|
@@ -531,7 +536,7 @@ fill_random_bytes_syscall(void *seed, size_t size)
 	errno = 0;
 	ret = syscall(SYS_getrandom, seed, size, GRND_NONBLOCK);
 	if (errno == ENOSYS) {
-	    try_syscall = 0;
+	    ATOMIC_SET(try_syscall, 0);
 	    return -1;
 	}
 	if ((size_t)ret == size) return 0;

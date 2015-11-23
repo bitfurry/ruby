@@ -1,3 +1,4 @@
+# frozen_string_literal: true
 #
 # = net/ftp.rb - FTP Client Library
 #
@@ -79,12 +80,13 @@ module Net
     FTP_PORT = 21
     CRLF = "\r\n"
     DEFAULT_BLOCKSIZE = BufferedIO::BUFSIZE
+    @@default_passive = true
     # :startdoc:
 
     # When +true+, transfers are performed in binary mode.  Default: +true+.
     attr_reader :binary
 
-    # When +true+, the connection is in passive mode.  Default: +false+.
+    # When +true+, the connection is in passive mode.  Default: +true+.
     attr_accessor :passive
 
     # When +true+, all traffic to and from the server is written
@@ -123,6 +125,18 @@ module Net
     # The server's last response.
     attr_reader :last_response
 
+    # When +true+, connections are in passive mode per default.
+    # Default: +true+.
+    def self.default_passive=(value)
+      @@default_passive = value
+    end
+
+    # When +true+, connections are in passive mode per default.
+    # Default: +true+.
+    def self.default_passive
+      @@default_passive
+    end
+
     #
     # A synonym for <tt>FTP.new</tt>, but with a mandatory host parameter.
     #
@@ -150,7 +164,7 @@ module Net
     def initialize(host = nil, user = nil, passwd = nil, acct = nil)
       super()
       @binary = true
-      @passive = false
+      @passive = @@default_passive
       @debug_mode = false
       @resume = false
       @sock = NullSocket.new
@@ -599,7 +613,8 @@ module Net
     # chunks.
     #
     def getbinaryfile(remotefile, localfile = File.basename(remotefile),
-                      blocksize = DEFAULT_BLOCKSIZE) # :yield: data
+                      blocksize = DEFAULT_BLOCKSIZE, &block) # :yield: data
+      f = nil
       result = nil
       if localfile
         if @resume
@@ -610,18 +625,18 @@ module Net
           f = open(localfile, "w")
         end
       elsif !block_given?
-        result = ""
+        result = String.new
       end
       begin
-        f.binmode if localfile
+        f&.binmode
         retrbinary("RETR #{remotefile}", blocksize, rest_offset) do |data|
-          f.write(data) if localfile
-          yield(data) if block_given?
-          result.concat(data) if result
+          f&.write(data)
+          block&.(data)
+          result&.concat(data)
         end
         return result
       ensure
-        f.close if localfile
+        f&.close
       end
     end
 
@@ -632,23 +647,25 @@ module Net
     # If a block is supplied, it is passed the retrieved data one
     # line at a time.
     #
-    def gettextfile(remotefile, localfile = File.basename(remotefile)) # :yield: line
+    def gettextfile(remotefile, localfile = File.basename(remotefile),
+                    &block) # :yield: line
+      f = nil
       result = nil
       if localfile
         f = open(localfile, "w")
       elsif !block_given?
-        result = ""
+        result = String.new
       end
       begin
         retrlines("RETR #{remotefile}") do |line, newline|
           l = newline ? line + "\n" : line
-          f.print(l) if localfile
-          yield(line, newline) if block_given?
-          result.concat(l) if result
+          f&.print(l)
+          block&.(line, newline)
+          result&.concat(l)
         end
         return result
       ensure
-        f.close if localfile
+        f&.close
       end
     end
 
@@ -888,14 +905,14 @@ module Net
     CASE_INDEPENDENT_PARSER = ->(value) { value.downcase }
     DECIMAL_PARSER = ->(value) { value.to_i }
     OCTAL_PARSER = ->(value) { value.to_i(8) }
-    TIME_PARSER = ->(value) {
-      t = Time.strptime(value.sub(/\.\d+\z/, "") + "Z", "%Y%m%d%H%M%S%z")
-      fractions = value.slice(/\.(\d+)\z/, 1)
-      if fractions
-        t + fractions.to_i.quo(10 ** fractions.size)
-      else
-        t
+    TIME_PARSER = ->(value, local = false) {
+      unless /\A(?<year>\d{4})(?<month>\d{2})(?<day>\d{2})
+            (?<hour>\d{2})(?<min>\d{2})(?<sec>\d{2})
+            (\.(?<fractions>\d+))?/x =~ value
+        raise FTPProtoError, "invalid time-val: #{value}"
       end
+      usec = fractions.to_i * 10 ** (6 - fractions.to_s.size)
+      Time.send(local ? :local : :utc, year, month, day, hour, min, sec, usec)
     }
     FACT_PARSERS = Hash.new(CASE_DEPENDENT_PARSER)
     FACT_PARSERS["size"] = DECIMAL_PARSER
@@ -1028,16 +1045,12 @@ module Net
       end
     end
 
-    MDTM_REGEXP = /^(\d\d\d\d)(\d\d)(\d\d)(\d\d)(\d\d)(\d\d)/  # :nodoc:
-
     #
     # Returns the last modification time of the (remote) file.  If +local+ is
     # +true+, it is returned as a local time, otherwise it's a UTC time.
     #
     def mtime(filename, local = false)
-      str = mdtm(filename)
-      ary = str.scan(MDTM_REGEXP)[0].collect {|i| i.to_i}
-      return local ? Time.local(*ary) : Time.gm(*ary)
+      return TIME_PARSER.(mdtm(filename), local)
     end
 
     #
@@ -1248,24 +1261,7 @@ module Net
       if !resp.start_with?("257")
         raise FTPReplyError, resp
       end
-      if resp[3, 2] != ' "'
-        return ""
-      end
-      dirname = ""
-      i = 5
-      n = resp.length
-      while i < n
-        c = resp[i, 1]
-        i = i + 1
-        if c == '"'
-          if i > n or resp[i, 1] != '"'
-            break
-          end
-          i = i + 1
-        end
-        dirname = dirname + c
-      end
-      return dirname
+      return resp.slice(/"(([^"]|"")*)"/, 1).to_s.gsub(/""/, '"')
     end
     private :parse257
 
@@ -1291,11 +1287,11 @@ module Net
 
       def read(len = nil)
         if len
-          s = super(len, "", true)
+          s = super(len, String.new, true)
           return s.empty? ? nil : s
         else
           result = ""
-          while s = super(DEFAULT_BLOCKSIZE, "", true)
+          while s = super(DEFAULT_BLOCKSIZE, String.new, true)
             break if s.empty?
             result << s
           end

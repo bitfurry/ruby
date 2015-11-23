@@ -147,7 +147,12 @@ void xfree(void*);
 #undef _WIN32
 #endif
 
-#if defined(_WIN32) || defined(__EMX__)
+#if defined(_WIN32)
+/*
+  DOSISH mean MS-Windows style filesystem.
+  But you should use more precise macros like DOSISH_DRIVE_LETTER, PATH_SEP,
+  ENV_IGNORECASE or CASEFOLD_FILESYSTEM.
+ */
 #define DOSISH 1
 # define DOSISH_DRIVE_LETTER
 #endif
@@ -163,7 +168,7 @@ void xfree(void*);
 #include "ruby/win32.h"
 #endif
 
-#if defined(__BEOS__) && !defined(__HAIKU__) && !defined(BONE)
+#if defined(__BEOS__) && !defined(BONE)
 #include <net/socket.h> /* intern.h needs fd_set definition */
 #endif
 
@@ -220,7 +225,7 @@ void rb_ia64_flushrs(void);
 
 #define PATH_ENV "PATH"
 
-#if defined(DOSISH) && !defined(__EMX__)
+#if defined(DOSISH)
 #define ENV_IGNORECASE
 #endif
 

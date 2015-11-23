@@ -90,7 +90,7 @@ initialize(int argc, VALUE argv[], VALUE self)
     ffi_type **arg_types;
     ffi_status result;
     VALUE ptr, args, ret_type, abi, kwds;
-    int i;
+    long i;
 
     rb_scan_args(argc, argv, "31:", &ptr, &args, &ret_type, &abi, &kwds);
     if(NIL_P(abi)) abi = INT2NUM(FFI_DEFAULT_ABI);
@@ -110,7 +110,7 @@ initialize(int argc, VALUE argv[], VALUE self)
     arg_types = xcalloc(RARRAY_LEN(args) + 1, sizeof(ffi_type *));
 
     for (i = 0; i < RARRAY_LEN(args); i++) {
-	int type = NUM2INT(RARRAY_PTR(args)[i]);
+	int type = NUM2INT(RARRAY_AREF(args, i));
 	arg_types[i] = INT2FFI_TYPE(type);
     }
     arg_types[RARRAY_LEN(args)] = NULL;
@@ -144,9 +144,8 @@ function_call(int argc, VALUE argv[], VALUE self)
     cPointer = rb_const_get(mFiddle, rb_intern("Pointer"));
 
     Check_Max_Args("number of arguments", argc);
-    if(argc != RARRAY_LENINT(types)) {
-	rb_raise(rb_eArgError, "wrong number of arguments (%d for %d)",
-		argc, RARRAY_LENINT(types));
+    if (argc != (i = RARRAY_LENINT(types))) {
+	rb_error_arity(argc, i, i);
     }
 
     TypedData_Get_Struct(self, ffi_cif, &function_data_type, cif);
@@ -165,7 +164,7 @@ function_call(int argc, VALUE argv[], VALUE self)
     values = (void **)((char *)generic_args + (size_t)argc * sizeof(fiddle_generic));
 
     for (i = 0; i < argc; i++) {
-	VALUE type = RARRAY_PTR(types)[i];
+	VALUE type = RARRAY_AREF(types, i);
 	VALUE src = argv[i];
 
 	if(NUM2INT(type) == TYPE_VOIDP) {
